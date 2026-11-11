@@ -442,7 +442,6 @@ html.app-ready #preview-banner { display: none !important; }
     <button type="button" class="main-tab" id="tab-tasks" role="tab" aria-selected="true">Tasks</button>
     <button type="button" class="main-tab" id="tab-time" role="tab" aria-selected="false">Time</button>
     <button type="button" class="main-tab" id="tab-travel" role="tab" aria-selected="false">Travel</button>
-    <button type="button" class="main-tab" id="tab-truck" role="tab" aria-selected="false">Truck</button>
   </nav>
   <div id="view-root"></div>
 </div>
@@ -811,7 +810,6 @@ html.app-ready #preview-banner { display: none !important; }
   document.getElementById("tab-tasks").addEventListener("click", function () { mainTab = "tasks"; renderMain(); });
   document.getElementById("tab-time").addEventListener("click", function () { mainTab = "time"; renderMain(); });
   document.getElementById("tab-travel").addEventListener("click", function () { mainTab = "travel"; renderMain(); });
-  document.getElementById("tab-truck").addEventListener("click", function () { mainTab = "truck"; renderMain(); });
 
   /* ------------------------------------------------------------------
      Rendering — Tasks + Time
@@ -836,10 +834,8 @@ html.app-ready #preview-banner { display: none !important; }
     document.getElementById("tab-tasks").setAttribute("aria-selected", mainTab === "tasks" ? "true" : "false");
     document.getElementById("tab-time").setAttribute("aria-selected", mainTab === "time" ? "true" : "false");
     document.getElementById("tab-travel").setAttribute("aria-selected", mainTab === "travel" ? "true" : "false");
-    document.getElementById("tab-truck").setAttribute("aria-selected", mainTab === "truck" ? "true" : "false");
     if (mainTab === "time") renderTime();
     else if (mainTab === "travel") renderTravel();
-    else if (mainTab === "truck") renderTruck();
     else renderTasks();
   }
 
@@ -1496,124 +1492,6 @@ html.app-ready #preview-banner { display: none !important; }
       got: !!item.got,
       gotBy: item.gotBy || "",
       gotAt: item.gotAt || ""
-    };
-  }
-
-  function canEditTruck(item) { return item && item.addedBy === role; }
-  function canDeleteTruck(item) { return item && (role === "boss" || item.addedBy === role); }
-
-  function renderTruck() {
-    var items = data.truckSupplies || [];
-    var gotN = 0;
-    items.forEach(function (it) { if (it.got) gotN++; });
-    var html = '<div class="card"><h3 style="margin:0 0 6px">Truck Supplies</h3>';
-    html += '<p class="help">Tools and supplies for the truck. Both of you can add items on this device.</p>';
-    if (items.length) html += '<p class="got-count" id="truck-got-count">' + gotN + " of " + items.length + " gotten</p>";
-    html += '<div class="field"><label for="truck-name">Item name</label><input id="truck-name" type="text" placeholder="e.g. Fish tape, spare breakers"></div>';
-    html += '<div class="part-metrics">';
-    html += '<div class="field"><label for="truck-qty">Qty</label><input id="truck-qty" type="text" inputmode="decimal" placeholder="1"></div>';
-    html += '<div class="field"><label for="truck-unit">Unit</label>' + unitSelectHtml("truck-unit", "qty") + "</div>";
-    html += '<div class="field"><label for="truck-note">Note (optional)</label><input id="truck-note" type="text" placeholder="Size, brand…"></div>';
-    html += "</div>";
-    html += '<button type="button" class="btn accent block" id="add-truck-btn">Add to Truck</button></div>';
-
-    if (!items.length) {
-      html += '<div class="empty"><strong>No truck supplies yet</strong>Add tools and stock you want on the truck.</div>';
-    } else {
-      items.slice().sort(function (a, b) { return String(b.addedAt || "").localeCompare(String(a.addedAt || "")); }).forEach(function (it) {
-        var qtyLabel = formatPartQty(it);
-        var who = "Added by " + (roleLabel(it.addedBy) || "someone") + (it.addedAt ? " · " + fmtWhen(it.addedAt) : "");
-        if (it.got) who += " · Gotten" + (it.gotBy ? " by " + roleLabel(it.gotBy) : "") + (it.gotAt ? " · " + fmtWhen(it.gotAt) : "");
-        html += '<div class="card part-item' + (it.got ? " is-got" : "") + '" data-truck-id="' + esc(it.id) + '">' +
-          '<button type="button" class="got-check" role="checkbox" aria-checked="' + (it.got ? "true" : "false") + '" data-got-truck="' + esc(it.id) + '" aria-label="' + esc((it.got ? "Mark not gotten: " : "Mark as gotten: ") + (it.name || "item")) + '">' +
-          (it.got ? "✓" : "") + "</button>" +
-          '<div class="part-body"><div class="who">' + (qtyLabel ? '<span class="part-qty-label">' + esc(qtyLabel) + "</span>" : "") + esc(who) + "</div>" +
-          '<div class="part-text"><strong>' + esc(it.name) + "</strong>" + (it.note ? " — " + esc(it.note) : "") + "</div>" +
-          '<div class="entry-actions">';
-        if (canEditTruck(it)) html += '<button type="button" class="btn sm ghost" data-edit-truck="' + esc(it.id) + '">Edit</button>';
-        if (canDeleteTruck(it)) html += '<button type="button" class="btn sm ghost" data-del-truck="' + esc(it.id) + '">Delete</button>';
-        html += "</div></div></div>";
-      });
-    }
-    viewRoot.innerHTML = html;
-    document.getElementById("add-truck-btn").addEventListener("click", addTruckItem);
-    viewRoot.querySelectorAll("[data-got-truck]").forEach(function (b) {
-      b.addEventListener("click", function (e) { e.preventDefault(); toggleTruckGot(b.getAttribute("data-got-truck")); });
-    });
-    viewRoot.querySelectorAll("[data-edit-truck]").forEach(function (b) {
-      b.addEventListener("click", function () { editTruckItem(b.getAttribute("data-edit-truck")); });
-    });
-    viewRoot.querySelectorAll("[data-del-truck]").forEach(function (b) {
-      b.addEventListener("click", function () { deleteTruckItem(b.getAttribute("data-del-truck")); });
-    });
-  }
-
-  function addTruckItem() {
-    var name = val("truck-name").trim();
-    if (!name) { showToast("Enter an item name.", true); try { document.getElementById("truck-name").focus(); } catch (e) {} return; }
-    data.truckSupplies.push(normalizeTruckItem({
-      id: uid(),
-      name: name,
-      qty: val("truck-qty").trim(),
-      unit: val("truck-unit") || "qty",
-      note: val("truck-note").trim(),
-      addedBy: role,
-      addedAt: nowIso(),
-      got: false
-    }));
-    persist();
-    renderTruck();
-    showToast("Added to truck supplies.");
-  }
-
-  function toggleTruckGot(id) {
-    var item = findById(data.truckSupplies || [], id);
-    if (!item) return;
-    item.got = !item.got;
-    if (item.got) { item.gotBy = role; item.gotAt = nowIso(); }
-    else { item.gotBy = ""; item.gotAt = ""; }
-    persist();
-    renderTruck();
-  }
-
-  async function deleteTruckItem(id) {
-    var item = findById(data.truckSupplies || [], id);
-    if (!item || !canDeleteTruck(item)) return;
-    var ok = await confirmDlg({ title: "Remove this truck item?", message: item.name || "This item will come off the list.", danger: true, ok: "Delete" });
-    if (!ok) return;
-    data.truckSupplies = data.truckSupplies.filter(function (it) { return it.id !== id; });
-    persist();
-    renderTruck();
-    showToast("Truck item removed.");
-  }
-
-  function editTruckItem(id) {
-    var item = findById(data.truckSupplies || [], id);
-    if (!item || !canEditTruck(item)) return;
-    openModal(
-      '<div class="modal" role="dialog" aria-modal="true"><h2>Edit truck item</h2>' +
-        '<div class="field"><label for="truck-edit-name">Item name</label><input id="truck-edit-name" class="text-input" type="text" value="' + esc(item.name) + '"></div>' +
-        '<div class="part-metrics">' +
-        '<div class="field"><label for="truck-edit-qty">Qty</label><input id="truck-edit-qty" class="text-input" type="text" inputmode="decimal" value="' + esc(item.qty) + '"></div>' +
-        '<div class="field"><label for="truck-edit-unit">Unit</label>' + unitSelectHtml("truck-edit-unit", item.unit || "qty") + "</div>" +
-        '<div class="field"><label for="truck-edit-note">Note</label><input id="truck-edit-note" class="text-input" type="text" value="' + esc(item.note) + '"></div>' +
-        "</div>" +
-        '<div class="modal-actions"><button type="button" class="btn ghost" id="modal-cancel">Cancel</button>' +
-        '<button type="button" class="btn accent" id="modal-ok">Save</button></div></div>'
-    );
-    modalDone = function () {};
-    document.getElementById("modal-cancel").onclick = function () { closeModal(); };
-    document.getElementById("modal-ok").onclick = function () {
-      var name = val("truck-edit-name").trim();
-      if (!name) { showToast("Enter an item name.", true); return; }
-      item.name = name;
-      item.qty = val("truck-edit-qty").trim();
-      item.unit = partUnit({ unit: val("truck-edit-unit") });
-      item.note = val("truck-edit-note").trim();
-      persist();
-      closeModal();
-      renderTruck();
-      showToast("Truck item updated.");
     };
   }
 
