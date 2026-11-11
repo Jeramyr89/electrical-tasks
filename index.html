@@ -1,0 +1,2328 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#15202b">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Electrical Tasks">
+<title>Electrical Tasks</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect fill='%23d4920b' width='16' height='16' rx='3'/%3E%3C/svg%3E">
+<link rel="apple-touch-icon" href="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAALQAAAC0CAYAAAA9zQYyAAACrElEQVR42u3asQ3CQBQFQefE5OR0S230AyKEyAFnn9djaRt4N/qRl2Xn73q7v9RpOcPnoXVo7B5PCeAeSQnYHkUJ2B5BGdiGVwa1wZVAbWRlYBtWGdQGVQa1IZVCbURlQBtQGdSGUwa1wZRCbSxlQBtKKdRGUga0gZRCbRxlQBtGKdRGEdAS0NJg0AZRCrUxBLQEtH57Pi5DAloZzEDDBTTQgnlC0HABnUINF8xAC2igBTTQMMMMNNBAC2agBTTQMMMMNNBAAw000IIZaAENNMwwAw000EDDDLSABlpAAw0zzEADbV+gYQZaQAMtoIGGGWaggRbQMAMtoIGGGWaggQYaaKAFNMxAC2igYYYZaKCBBhpmAQ000AIaaJhhBhpoAQ0z0IYAGmigYQYaZqCBBlpAwwy0gAYaZpiBBhpooMOgtwhoZTADLdcZaJiBBhpomIGGGWigXWeggQYaaJhhBhpooIGGGWag66D9ywGwH52AFsxAC2iggYYZaKCB1nFB2xVooIEWzEBrIGibAg000JoRtD2BBhpozQjalkC7zkDLdQZaQAMNNMxAnwy0DYEGGmjBDLSABhpomIEGWkAfF7TtgAYaaCPADLQGgrYb0EAL6BlB2wxooAX0jKDtBbTrLKBdZ6AFNNBAwwz0yUDbCWigBTTMQAtooLUOtI2ABlpAzwjaPkADLaBhBloDQdsGaKAF9Iyg7QI00AJ6RtA2Adp1FtCus4AGGmitA20PoDOgbQE00AIaZn2B/nyGADqDGej/grYD0EALaAloAS0BLe0JGmqlMAMtoCWgpY1AQ60UZqCVAw21UpiBVg401EphBlo50FArhRlq5TBDrRxmoJUDDbVSmKFWDjPUymEGWznIUCuJGWrlMIOtHGSwlYQMtpKQAVcSMOzQ7vW9AcWKd6ngkLkmAAAAAElFTkSuQmCC">
+<!--
+  Electrical Tasks v2 — single-file private web app for two people:
+  Boss (assigns jobs) and Electrician (field work).
+
+  Storage: localStorage only (no Firebase, no CDN, no build step).
+  Every read/write goes through the Storage module at the top of the
+  script (lsGet / lsSet / loadData / saveData / loadSession / saveSession)
+  with try/catch and an in-memory fallback. That keeps the app usable in
+  Android content:// file viewers that throw SecurityError on localStorage
+  before any click handlers would otherwise attach.
+
+  Data model — localStorage key "electrical-tasks-v2":
+  {
+    version: 2,
+    clients:  [{ id, name }],
+    projects: [{ id, name }],
+    tasks: [{
+      id, title, description,
+      priority: "high" | "medium" | "low",
+      address, clientId, projectId,
+      status: "pending" | "in-progress" | "completed",
+      initialNotes, inProgressNotes, completedNotes:
+        [{ id, text, by, at }],
+      photos: [{ id, dataUrl, by, at }],
+      parts:  [{ id, name, qty, unit: "qty"|"ft"|"in", note, got, by, at }],
+      // unit defaults to qty; legacy parts with no unit are treated as qty.
+      createdBy, createdAt, updatedAt
+    }],
+    timeEntries: [{
+      id, clientId, projectId,
+      arrived, left, lunchMinutes, hours,
+      materials, notes, date, by, at
+      // Legacy entries may have only `hours` (arrived/left blank).
+      // New entries store arrived/left as "HH:MM", lunchMinutes, and
+      // computed hours = (left - arrived - lunch), +24h if past midnight.
+    }],
+    travelEntries: [{
+      id, type: "drive" | "parts-run" | "between-jobs",
+      clientId, projectId,
+      start, end, breakMinutes, hours,
+      notes, date, by, at
+      // Hours = (end - start - break), +24h if past midnight.
+    }],
+    truckSupplies: [{
+      id, name, qty, unit, note,
+      addedBy, addedAt,
+      got, gotBy, gotAt
+    }]
+    // parts.got and truckSupplies.got default false on legacy items.
+  }
+  Session — key "electrical-tasks-v2-session": { role: "boss" | "electrician" }
+
+  Test passwords: boss123 = Boss, work123 = Electrician
+-->
+<style>
+:root {
+  --bg: #eef1f4;
+  --card: #ffffff;
+  --ink: #15202b;
+  --muted: #5c6773;
+  --line: #d5dbe3;
+  --header: #15202b;
+  --accent: #d4920b;
+  --accent-ink: #1a1406;
+  --accent-soft: #fff4d6;
+  --danger: #b42318;
+  --danger-soft: #fdecea;
+  --ok: #157347;
+  --ok-soft: #e6f6ec;
+  --high: #b42318;
+  --med: #b78105;
+  --low: #157347;
+  --shadow: 0 1px 2px rgba(21,32,43,.06), 0 8px 24px rgba(21,32,43,.08);
+  --radius: 14px;
+  --tap: 48px;
+  --font: system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  --safe-t: env(safe-area-inset-top, 0px);
+  --safe-b: env(safe-area-inset-bottom, 0px);
+}
+* { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+html {
+  margin: 0; padding: 0;
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+  height: 100%;
+}
+html, body { background: var(--bg); color: var(--ink); font-family: var(--font); font-size: 16px; line-height: 1.45; }
+body {
+  margin: 0; padding: 0;
+  min-height: 100vh;
+  min-height: 100dvh;
+  min-height: -webkit-fill-available;
+}
+button, input, select, textarea {
+  font: inherit;
+  font-size: 16px;
+  color: inherit;
+  touch-action: manipulation;
+  max-width: 100%;
+}
+/* 16px on form controls prevents iOS Safari zoom on focus */
+input[type="date"], input[type="time"], input[type="number"], input[type="text"], input[type="password"], select, textarea {
+  font-size: 16px;
+}
+img { max-width: 100%; display: block; }
+[hidden] { display: none !important; }
+.sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0,0,0,0); border: 0; }
+
+/* ===== Login ===== */
+#login-screen {
+  min-height: 100vh; min-height: 100dvh; min-height: -webkit-fill-available;
+  display: flex; align-items: center; justify-content: center;
+  padding: calc(24px + var(--safe-t)) 20px calc(24px + var(--safe-b));
+  background: radial-gradient(1200px 600px at 50% -10%, #243447, #15202b 55%);
+}
+.login-card {
+  width: 100%; max-width: 400px; background: var(--card);
+  border-radius: 20px; padding: 28px 22px 24px; box-shadow: var(--shadow);
+}
+.logo {
+  width: 56px; height: 56px; border-radius: 16px;
+  background: var(--accent-soft); color: var(--accent);
+  display: grid; place-items: center; margin: 0 auto 16px;
+}
+.logo svg { width: 32px; height: 32px; }
+.login-card h1 { margin: 0 0 6px; text-align: center; font-size: 1.55rem; letter-spacing: -0.02em; }
+.login-card .sub { margin: 0 0 22px; text-align: center; color: var(--muted); }
+#login-password {
+  width: 100%; height: 52px; padding: 0 14px; border: 1.5px solid var(--line);
+  border-radius: 12px; background: #fafbfc; margin-bottom: 12px;
+}
+#login-password:focus { outline: 3px solid rgba(212,146,11,.35); border-color: var(--accent); }
+#login-btn {
+  width: 100%; height: 52px; border: 0; border-radius: 12px;
+  background: var(--accent); color: var(--accent-ink); font-weight: 700;
+  cursor: pointer;
+}
+#login-btn:active { transform: scale(.98); }
+#login-error { margin: 12px 0 0; color: var(--danger); font-weight: 600; text-align: center; }
+.login-hint { margin: 18px 0 0; font-size: 12px; color: #8a93a0; text-align: center; }
+
+/* ===== App shell ===== */
+#app-screen { min-height: 100vh; min-height: 100dvh; min-height: -webkit-fill-available; display: flex; flex-direction: column; }
+.app-header {
+  position: sticky; top: 0; z-index: 20;
+  background: var(--header); color: #fff;
+  padding: calc(10px + var(--safe-t)) 12px 10px;
+  display: flex; align-items: center; gap: 8px;
+}
+.app-header .brand { flex: 1; min-width: 0; }
+.app-header h1 { margin: 0; font-size: 1.05rem; font-weight: 700; letter-spacing: -0.01em; }
+.app-header .role { margin: 1px 0 0; font-size: 12px; color: #c9d3de; }
+.icon-btn {
+  flex: 0 0 auto; min-width: var(--tap); height: var(--tap);
+  border: 0; border-radius: 12px; background: rgba(255,255,255,.08);
+  color: #fff; cursor: pointer; padding: 0 10px; font-weight: 600; font-size: 13px;
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+}
+.icon-btn:active { background: rgba(255,255,255,.16); }
+.icon-btn.ask { background: var(--accent); color: var(--accent-ink); }
+
+.main-tabs {
+  display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 5px;
+  padding: 10px 12px 0; background: var(--bg);
+  position: sticky; top: calc(58px + var(--safe-t)); z-index: 15;
+}
+.main-tab {
+  height: 44px; border: 0; border-radius: 11px; background: #dde3ea;
+  color: var(--ink); font-weight: 700; cursor: pointer; font-size: 15px;
+  padding: 0 4px;
+}
+.main-tab[aria-selected="true"] { background: var(--header); color: #fff; }
+
+#view-root { flex: 1; padding: 12px 12px calc(24px + var(--safe-b)); width: 100%; max-width: 720px; margin: 0 auto; }
+
+/* ===== Shared controls ===== */
+.row { display: flex; gap: 8px; align-items: center; }
+.row.wrap { flex-wrap: wrap; }
+.grow { flex: 1; min-width: 0; }
+.btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+  min-height: var(--tap); padding: 0 14px; border-radius: 12px; border: 0;
+  font-weight: 700; cursor: pointer; background: var(--header); color: #fff;
+}
+.btn:active { transform: scale(.98); }
+.btn.accent { background: var(--accent); color: var(--accent-ink); }
+.btn.ghost { background: #fff; color: var(--ink); border: 1.5px solid var(--line); }
+.btn.danger { background: var(--danger); color: #fff; }
+.btn.ok { background: var(--ok); color: #fff; }
+.btn.sm { min-height: 40px; padding: 0 12px; font-size: 14px; }
+.btn.block { width: 100%; }
+.field { margin: 0 0 12px; }
+.field label, .label { display: block; font-size: 13px; font-weight: 700; margin: 0 0 6px; color: var(--ink); }
+.field input, .field select, .field textarea, .text-input, .text-area, .select {
+  width: 100%; border: 1.5px solid var(--line); border-radius: 12px;
+  background: #fff; color: var(--ink); padding: 12px 12px; min-height: 48px;
+  font-size: 16px;
+}
+.combo .btn { min-height: 48px; font-size: 16px; }
+.field textarea, .text-area { min-height: 88px; resize: vertical; }
+.field input:focus, .field select:focus, .field textarea:focus,
+.text-input:focus, .text-area:focus, .select:focus {
+  outline: 3px solid rgba(212,146,11,.35); border-color: var(--accent);
+}
+.help { font-size: 12px; color: var(--muted); margin: 4px 0 0; }
+.card {
+  background: var(--card); border-radius: var(--radius); box-shadow: var(--shadow);
+  padding: 14px; margin: 0 0 10px;
+}
+.toolbar { display: flex; gap: 8px; align-items: center; margin: 12px 0; }
+.banner {
+  background: var(--accent-soft); color: #5c4304; border-radius: 12px;
+  padding: 10px 12px; margin: 0 0 12px; font-size: 13px; font-weight: 600;
+}
+.banner.warn { background: #fff1e8; color: #8a3c00; }
+.empty { text-align: center; color: var(--muted); padding: 36px 16px; }
+.empty strong { display: block; color: var(--ink); margin-bottom: 4px; font-size: 1.05rem; }
+
+/* Status tabs */
+.status-tabs { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 6px; margin-top: 10px; }
+.status-tab {
+  min-height: 44px; border: 0; border-radius: 11px; background: #fff;
+  border: 1.5px solid var(--line); font-weight: 700; cursor: pointer; color: var(--ink);
+  padding: 6px 4px; font-size: 13px; line-height: 1.2;
+}
+.status-tab .count { display: block; font-size: 11px; font-weight: 600; color: var(--muted); }
+.status-tab[aria-selected="true"] { background: var(--header); color: #fff; border-color: var(--header); }
+.status-tab[aria-selected="true"] .count { color: #c9d3de; }
+
+/* Task cards */
+.task-card { cursor: pointer; display: block; width: 100%; text-align: left; border: 0; }
+.task-card .top { display: flex; gap: 8px; align-items: flex-start; }
+.task-card h3 { margin: 0; font-size: 1.05rem; flex: 1; }
+.prio {
+  flex: 0 0 auto; font-size: 11px; font-weight: 800; letter-spacing: .04em;
+  text-transform: uppercase; padding: 4px 8px; border-radius: 999px;
+}
+.prio.high { background: var(--danger-soft); color: var(--high); }
+.prio.medium { background: #fff4d6; color: #8a5a00; }
+.prio.low { background: var(--ok-soft); color: var(--ok); }
+.meta { margin: 6px 0 0; color: var(--muted); font-size: 13px; }
+.task-card.high { border-left: 4px solid var(--high); }
+.task-card.medium { border-left: 4px solid var(--med); }
+.task-card.low { border-left: 4px solid var(--low); }
+
+/* Priority toggle */
+.seg { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 6px; }
+.seg button {
+  min-height: 44px; border-radius: 11px; border: 1.5px solid var(--line);
+  background: #fff; font-weight: 700; cursor: pointer;
+}
+.seg button[aria-pressed="true"].high { background: var(--danger-soft); border-color: var(--high); color: var(--high); }
+.seg button[aria-pressed="true"].medium { background: #fff4d6; border-color: var(--med); color: #8a5a00; }
+.seg button[aria-pressed="true"].low { background: var(--ok-soft); border-color: var(--ok); color: var(--ok); }
+
+/* Task panel (full-screen editor) */
+#task-panel {
+  position: fixed; inset: 0; z-index: 40; background: var(--bg);
+  display: flex; flex-direction: column; overflow: auto;
+}
+.panel-bar {
+  position: sticky; top: 0; z-index: 2;
+  background: var(--header); color: #fff;
+  padding: calc(10px + var(--safe-t)) 12px 10px;
+  display: flex; align-items: center; gap: 8px;
+}
+.panel-bar h2 { margin: 0; flex: 1; font-size: 1.05rem; }
+.panel-body { padding: 14px 12px calc(28px + var(--safe-b)); width: 100%; max-width: 720px; margin: 0 auto; }
+.section { margin: 0 0 18px; }
+.section h3 { margin: 0 0 8px; font-size: 0.95rem; }
+.note { background: #f6f8fa; border-radius: 10px; padding: 10px 12px; margin: 0 0 8px; }
+.note .who { font-size: 12px; color: var(--muted); margin-bottom: 4px; }
+.part-metrics {
+  display: grid;
+  grid-template-columns: minmax(62px, 0.7fr) minmax(96px, 0.95fr) minmax(0, 1.4fr);
+  gap: 8px;
+  align-items: end;
+}
+.part-metrics .field { margin-bottom: 12px; min-width: 0; }
+.part-metrics .select { padding-left: 8px; padding-right: 8px; }
+.part-qty-label { font-weight: 800; margin-right: 6px; white-space: nowrap; }
+.part-row, .photo-grid { display: flex; }
+.photo-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin: 8px 0; }
+.thumb {
+  position: relative; border: 0; padding: 0; border-radius: 10px; overflow: hidden;
+  background: #dde3ea; aspect-ratio: 1; cursor: pointer;
+}
+.thumb img { width: 100%; height: 100%; object-fit: cover; }
+.thumb .del {
+  position: absolute; top: 4px; right: 4px; width: 32px; height: 32px;
+  border: 0; border-radius: 8px; background: rgba(21,32,43,.75); color: #fff;
+  font-weight: 700; cursor: pointer;
+}
+.file-btn { position: relative; overflow: hidden; }
+.file-btn input[type=file] {
+  position: absolute; inset: 0; opacity: 0; width: 100%; height: 100%; cursor: pointer;
+}
+
+/* Time */
+.combo { display: flex; gap: 8px; align-items: stretch; }
+.combo select, .combo .select { flex: 1; }
+.combo .btn { flex: 0 0 auto; white-space: nowrap; }
+.time-pair { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.time-total { font-weight: 800; font-size: 1.05rem; margin: 4px 0 12px; }
+.time-entry h3 { margin: 0 0 4px; font-size: 1rem; }
+.entry-actions { margin-top: 8px; }
+.day-summary h3 { margin: 0 0 8px; font-size: 0.95rem; }
+.day-summary-line { font-size: 1.05rem; font-weight: 700; line-height: 1.4; }
+.part-item { display: flex; gap: 10px; align-items: flex-start; }
+.part-item .part-body { flex: 1; min-width: 0; }
+.got-check {
+  flex: 0 0 auto;
+  width: 44px; height: 44px; min-width: 44px; min-height: 44px;
+  border: 1.5px solid var(--line); border-radius: 10px;
+  background: #fff; color: #fff; padding: 0; margin: 0;
+  display: inline-flex; align-items: center; justify-content: center;
+  cursor: pointer; font-size: 20px; line-height: 1;
+  -webkit-appearance: none; appearance: none;
+  touch-action: manipulation;
+}
+.got-check[aria-checked="true"] { background: var(--ok); border-color: var(--ok); }
+.part-item.is-got .part-body { opacity: 0.58; }
+.part-item.is-got .part-body strong,
+.part-item.is-got .part-body .who,
+.part-item.is-got .part-body .part-text { text-decoration: line-through; }
+.got-count { font-weight: 600; color: var(--muted); font-size: 13px; }
+#time-hours[readonly] { background: #f4f6f8; color: var(--ink); font-weight: 700; }
+.help.error { color: var(--danger); font-weight: 600; }
+
+/* Modal / lightbox / toast */
+#modal-root, #lightbox {
+  position: fixed; inset: 0; z-index: 60; background: rgba(21,32,43,.55);
+  display: flex; align-items: flex-end; justify-content: center;
+  padding: 16px 12px calc(16px + var(--safe-b));
+}
+#lightbox { align-items: center; background: rgba(10,14,18,.92); z-index: 70; padding: 16px; }
+@media (min-width: 560px) {
+  #modal-root { align-items: center; }
+  .modal { max-width: 440px; }
+}
+.modal {
+  width: 100%; max-width: 520px; background: #fff; border-radius: 18px;
+  padding: 18px 16px 16px; box-shadow: var(--shadow);
+}
+.modal h2 { margin: 0 0 8px; font-size: 1.15rem; }
+.modal p { margin: 0 0 14px; color: var(--muted); }
+.modal-actions { display: flex; gap: 8px; margin-top: 8px; }
+.modal-actions .btn { flex: 1; }
+#lightbox img { max-height: 80vh; max-width: 100%; border-radius: 8px; }
+#lightbox .close-x {
+  position: absolute; top: calc(10px + var(--safe-t)); right: 12px;
+  min-width: 48px; height: 48px;
+}
+#toast {
+  position: fixed; left: 12px; right: 12px; bottom: calc(16px + var(--safe-b));
+  z-index: 80; background: var(--ink); color: #fff; border-radius: 12px;
+  padding: 12px 14px; font-weight: 600; text-align: center;
+  box-shadow: var(--shadow); max-width: 720px; margin: 0 auto;
+}
+#toast.bad { background: var(--danger); }
+.settings-list { list-style: none; margin: 0; padding: 0; }
+.settings-list li {
+  display: flex; gap: 8px; align-items: center; padding: 8px 0;
+  border-bottom: 1px solid var(--line);
+}
+.settings-list .name { flex: 1; font-weight: 600; }
+.muted { color: var(--muted); }
+.stack { display: flex; flex-direction: column; gap: 8px; }
+hr.sep { border: 0; border-top: 1px solid var(--line); margin: 8px 0 16px; }
+
+/* Visible in iOS Quick Look / JS-off previews; hidden as soon as the app script runs. */
+#preview-banner {
+  display: block;
+  box-sizing: border-box;
+  margin: 0;
+  padding: 16px 16px 18px;
+  padding-top: calc(16px + env(safe-area-inset-top, 0px));
+  background: #fff4d6;
+  color: #1a1406;
+  border-bottom: 3px solid #d4920b;
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  font-size: 16px;
+  line-height: 1.45;
+  position: relative;
+  z-index: 1000;
+}
+#preview-banner strong { display: block; font-size: 1.1rem; margin: 0 0 8px; }
+#preview-banner p { margin: 0; }
+html.app-ready #preview-banner { display: none !important; }
+</style>
+<script>
+  /* Hide the Quick Look preview banner immediately when JavaScript can run. */
+  document.documentElement.classList.add("app-ready");
+</script>
+</head>
+<body>
+<div id="preview-banner" role="status">
+  <strong>You&rsquo;re viewing a preview &mdash; buttons won&rsquo;t work here.</strong>
+  <p>On iPhone, open this app from its web link in Safari (then Share &gt; Add to Home Screen). On Android, open the file in Chrome.</p>
+</div>
+<div id="login-screen">
+  <div class="login-card">
+    <div class="logo" aria-hidden="true">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M13 2L4 14h7l-1 8 10-13h-7l0-7z"/>
+      </svg>
+    </div>
+    <h1>Electrical Tasks</h1>
+    <p class="sub">Enter your password to continue</p>
+    <label class="sr-only" for="login-password">Password</label>
+    <input id="login-password" type="password" autocomplete="current-password" autocapitalize="off" spellcheck="false" placeholder="Password">
+    <button type="button" id="login-btn">Sign In</button>
+    <p id="login-error" hidden></p>
+    <p class="login-hint">Private job board for the shop</p>
+  </div>
+</div>
+
+<div id="app-screen" hidden>
+  <header class="app-header">
+    <div class="brand">
+      <h1>Electrical Tasks</h1>
+      <div class="role" id="role-label"></div>
+    </div>
+    <button type="button" class="icon-btn ask" id="ask-grok-btn" title="Ask Grok">Ask Grok</button>
+    <button type="button" class="icon-btn" id="settings-btn" title="Settings">Settings</button>
+    <button type="button" class="icon-btn" id="logout-btn" title="Log out">Log out</button>
+  </header>
+  <div id="storage-banner" class="banner warn" hidden style="margin:10px 12px 0"></div>
+  <nav class="main-tabs" role="tablist">
+    <button type="button" class="main-tab" id="tab-tasks" role="tab" aria-selected="true">Tasks</button>
+    <button type="button" class="main-tab" id="tab-time" role="tab" aria-selected="false">Time</button>
+    <button type="button" class="main-tab" id="tab-travel" role="tab" aria-selected="false">Travel</button>
+    <button type="button" class="main-tab" id="tab-truck" role="tab" aria-selected="false">Truck</button>
+  </nav>
+  <div id="view-root"></div>
+</div>
+
+<div id="task-panel" hidden></div>
+<div id="modal-root" hidden></div>
+<div id="lightbox" hidden></div>
+<div id="toast" hidden></div>
+
+<script>
+
+(function () {
+  "use strict";
+
+  try {
+    document.documentElement.classList.add("app-ready");
+    var previewBanner = document.getElementById("preview-banner");
+    if (previewBanner) previewBanner.hidden = true;
+  } catch (e) {}
+
+  /* ------------------------------------------------------------------
+     Storage module — the only place that touches localStorage.
+     Swap loadData/saveData later for a Firebase backend.
+     ------------------------------------------------------------------ */
+  var DATA_KEY = "electrical-tasks-v2";
+  var SESSION_KEY = "electrical-tasks-v2-session";
+  var memoryStore = {};
+  var storageBlocked = false;
+  var lastQuotaError = false;
+
+  function lsGet(key) {
+    try {
+      var val = window.localStorage.getItem(key);
+      if (val != null) memoryStore[key] = val;
+      return val;
+    } catch (err) {
+      storageBlocked = true;
+      return Object.prototype.hasOwnProperty.call(memoryStore, key) ? memoryStore[key] : null;
+    }
+  }
+
+  function lsSet(key, val) {
+    memoryStore[key] = val;
+    lastQuotaError = false;
+    try {
+      window.localStorage.setItem(key, val);
+      return { ok: true };
+    } catch (err) {
+      var name = err && err.name ? String(err.name) : "";
+      var code = err && err.code;
+      var quota = name === "QuotaExceededError" || name === "NS_ERROR_DOM_QUOTA_REACHED" || code === 22 || code === 1014;
+      if (quota) {
+        lastQuotaError = true;
+        return { ok: false, quota: true };
+      }
+      storageBlocked = true;
+      return { ok: false, blocked: true };
+    }
+  }
+
+  function emptyData() {
+    return { version: 2, clients: [], projects: [], tasks: [], timeEntries: [], travelEntries: [], truckSupplies: [] };
+  }
+
+  function normalizeData(raw) {
+    var d = emptyData();
+    if (!raw || typeof raw !== "object") return d;
+    d.clients = Array.isArray(raw.clients) ? raw.clients : [];
+    d.projects = Array.isArray(raw.projects) ? raw.projects : [];
+    d.tasks = (Array.isArray(raw.tasks) ? raw.tasks : []).map(normalizeTaskParts);
+    d.timeEntries = (Array.isArray(raw.timeEntries) ? raw.timeEntries : []).map(normalizeTimeEntry);
+    d.travelEntries = (Array.isArray(raw.travelEntries) ? raw.travelEntries : []).map(normalizeTravelEntry);
+    d.truckSupplies = (Array.isArray(raw.truckSupplies) ? raw.truckSupplies : []).map(normalizeTruckItem);
+    return d;
+  }
+
+  function loadData() {
+    var raw = lsGet(DATA_KEY);
+    if (!raw) return emptyData();
+    try { return normalizeData(JSON.parse(raw)); }
+    catch (err) { return emptyData(); }
+  }
+
+  function saveData(data) {
+    var result = lsSet(DATA_KEY, JSON.stringify(data));
+    if (result.quota) {
+      showToast("Storage is full on this device. Delete some photos or old jobs, or export a backup first.", true);
+    } else if (result.blocked) {
+      showStorageBanner();
+    }
+    return result;
+  }
+
+  function loadSession() {
+    var raw = lsGet(SESSION_KEY);
+    if (!raw) return null;
+    try {
+      var s = JSON.parse(raw);
+      if (s && (s.role === "boss" || s.role === "electrician")) return s;
+    } catch (err) {}
+    return null;
+  }
+
+  function saveSession(session) {
+    return lsSet(SESSION_KEY, JSON.stringify(session));
+  }
+
+  function clearSession() {
+    try { window.localStorage.removeItem(SESSION_KEY); } catch (err) { storageBlocked = true; }
+    delete memoryStore[SESSION_KEY];
+  }
+
+  /* ------------------------------------------------------------------
+     App state
+     ------------------------------------------------------------------ */
+  var data = emptyData();
+  var role = null;
+  var mainTab = "tasks";
+  var statusFilter = "pending";
+  var timeClientFilter = "";
+  var timeProjectFilter = "";
+  var dayTotalDate = "";
+  var toastTimer = null;
+
+  function uid() {
+    return Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+  }
+  function nowIso() { return new Date().toISOString(); }
+  function todayYmd() {
+    var d = new Date();
+    var m = String(d.getMonth() + 1).padStart(2, "0");
+    var day = String(d.getDate()).padStart(2, "0");
+    return d.getFullYear() + "-" + m + "-" + day;
+  }
+  function esc(s) {
+    return String(s == null ? "" : s)
+      .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+  }
+  function roleLabel(r) { return r === "boss" ? "Boss" : "Electrician"; }
+  function fmtWhen(iso) {
+    if (!iso) return "";
+    try {
+      var d = new Date(iso);
+      return d.toLocaleString(undefined, { month: "short", day: "numeric", year: "numeric", hour: "numeric", minute: "2-digit" });
+    } catch (err) { return iso; }
+  }
+  function fmtDate(ymd) {
+    if (!ymd) return "";
+    var p = String(ymd).split("-");
+    if (p.length !== 3) return ymd;
+    try {
+      return new Date(Number(p[0]), Number(p[1]) - 1, Number(p[2])).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
+    } catch (err) { return ymd; }
+  }
+  function findById(list, id) {
+    if (!id) return null;
+    for (var i = 0; i < list.length; i++) if (list[i].id === id) return list[i];
+    return null;
+  }
+  function projectName(id) {
+    var p = findById(data.projects, id);
+    return p ? p.name : "";
+  }
+  function clientName(id) {
+    var c = findById(data.clients, id);
+    return c ? c.name : "";
+  }
+  function persist() {
+    data.tasks.forEach(function (t) { /* no-op keep shape */ });
+    return saveData(data);
+  }
+
+  /* ------------------------------------------------------------------
+     Toasts, banners, modal, lightbox
+     ------------------------------------------------------------------ */
+  var toastEl = document.getElementById("toast");
+  var modalRoot = document.getElementById("modal-root");
+  var lightboxEl = document.getElementById("lightbox");
+  var storageBanner = document.getElementById("storage-banner");
+
+  function showToast(msg, isBad) {
+    toastEl.textContent = msg;
+    toastEl.className = isBad ? "bad" : "";
+    toastEl.hidden = false;
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(function () { toastEl.hidden = true; }, 4200);
+  }
+
+  function showStorageBanner() {
+    storageBanner.hidden = false;
+    storageBanner.textContent = "This browser view cannot save data to the device. You can keep working, but everything will be lost when you close the page. Try opening the file in Chrome or Safari, or use the Export backup button in Settings.";
+  }
+
+  var modalDone = null;
+
+  function closeModal(value) {
+    var done = modalDone;
+    modalDone = null;
+    modalRoot.hidden = true;
+    modalRoot.innerHTML = "";
+    if (typeof done === "function") done(value);
+  }
+
+  function openModal(html) {
+    if (typeof modalDone === "function") {
+      var prev = modalDone;
+      modalDone = null;
+      prev(null);
+    }
+    modalRoot.innerHTML = html;
+    modalRoot.hidden = false;
+    var first = modalRoot.querySelector("input, textarea, button.primary, button");
+    if (first) setTimeout(function () { try { first.focus(); if (first.select) first.select(); } catch (e) {} }, 30);
+  }
+
+  function promptName(opts) {
+    return new Promise(function (resolve) {
+      openModal(
+        '<div class="modal" role="dialog" aria-modal="true">' +
+          "<h2>" + esc(opts.title || "New") + "</h2>" +
+          (opts.message ? "<p>" + esc(opts.message) + "</p>" : "") +
+          '<label class="label" for="modal-input">' + esc(opts.label || "Name") + "</label>" +
+          '<input class="text-input" id="modal-input" type="text" value="' + esc(opts.value || "") + '" placeholder="' + esc(opts.placeholder || "") + '">' +
+          '<div class="modal-actions">' +
+            '<button type="button" class="btn ghost" id="modal-cancel">Cancel</button>' +
+            '<button type="button" class="btn accent" id="modal-ok">Save</button>' +
+          "</div></div>"
+      );
+      var input = document.getElementById("modal-input");
+      modalDone = resolve;
+      document.getElementById("modal-cancel").onclick = function () { closeModal(null); };
+      document.getElementById("modal-ok").onclick = function () { closeModal((input.value || "").trim()); };
+      input.addEventListener("keydown", function (e) {
+        if (e.key === "Enter" || e.keyCode === 13) {
+          e.preventDefault();
+          closeModal((input.value || "").trim());
+        }
+      });
+    });
+  }
+
+  function confirmDlg(opts) {
+    return new Promise(function (resolve) {
+      openModal(
+        '<div class="modal" role="dialog" aria-modal="true">' +
+          "<h2>" + esc(opts.title || "Please confirm") + "</h2>" +
+          "<p>" + esc(opts.message || "") + "</p>" +
+          '<div class="modal-actions">' +
+            '<button type="button" class="btn ghost" id="modal-cancel">Cancel</button>' +
+            '<button type="button" class="btn ' + (opts.danger ? "danger" : "accent") + '" id="modal-ok">' + esc(opts.ok || "OK") + "</button>" +
+          "</div></div>"
+      );
+      modalDone = function (v) { resolve(!!v); };
+      document.getElementById("modal-cancel").onclick = function () { closeModal(false); };
+      document.getElementById("modal-ok").onclick = function () { closeModal(true); };
+    });
+  }
+
+  modalRoot.addEventListener("click", function (e) {
+    if (e.target === modalRoot) closeModal(null);
+  });
+
+
+  function openLightbox(src) {
+    lightboxEl.innerHTML = '<button type="button" class="icon-btn close-x" id="lb-close">Close</button><img alt="Photo" src="' + src + '">';
+    lightboxEl.hidden = false;
+    document.getElementById("lb-close").onclick = closeLightbox;
+  }
+  function closeLightbox() { lightboxEl.hidden = true; lightboxEl.innerHTML = ""; }
+  lightboxEl.addEventListener("click", function (e) {
+    if (e.target === lightboxEl || e.target.id === "lb-close") closeLightbox();
+  });
+
+  /* ------------------------------------------------------------------
+     Login (no <form>, click + Enter only)
+     ------------------------------------------------------------------ */
+  var loginScreen = document.getElementById("login-screen");
+  var appScreen = document.getElementById("app-screen");
+  var passwordInput = document.getElementById("login-password");
+  var loginBtn = document.getElementById("login-btn");
+  var loginError = document.getElementById("login-error");
+
+  function showLoginError(msg) {
+    loginError.textContent = msg;
+    loginError.hidden = !msg;
+  }
+
+  function doLogin() {
+    var pw = (passwordInput.value || "").trim();
+    var nextRole = null;
+    if (pw === "boss123") nextRole = "boss";
+    else if (pw === "work123") nextRole = "electrician";
+    if (!pw) {
+      showLoginError("Enter your password.");
+      try { passwordInput.focus(); } catch (e) {}
+      return;
+    }
+    if (!nextRole) {
+      showLoginError("Wrong password. Try again.");
+      try { passwordInput.focus(); passwordInput.select(); } catch (e) {}
+      return;
+    }
+    showLoginError("");
+    role = nextRole;
+    saveSession({ role: role });
+    enterApp();
+  }
+
+  loginBtn.addEventListener("click", function (e) {
+    e.preventDefault();
+    e.stopPropagation();
+    doLogin();
+  });
+  passwordInput.addEventListener("keydown", function (e) {
+    if (e.key === "Enter" || e.keyCode === 13) {
+      e.preventDefault();
+      e.stopPropagation();
+      doLogin();
+    }
+  });
+
+  function enterApp() {
+    loginScreen.hidden = true;
+    appScreen.hidden = false;
+    document.getElementById("role-label").textContent = "Signed in as " + roleLabel(role);
+    if (storageBlocked) showStorageBanner();
+    renderMain();
+  }
+
+  function logout() {
+    role = null;
+    clearSession();
+    closeModal();
+    closeLightbox();
+    document.getElementById("task-panel").hidden = true;
+    appScreen.hidden = true;
+    loginScreen.hidden = false;
+    passwordInput.value = "";
+    showLoginError("");
+    try { passwordInput.focus(); } catch (e) {}
+  }
+
+  document.getElementById("logout-btn").addEventListener("click", function (e) {
+    e.preventDefault();
+    logout();
+  });
+
+  /* ------------------------------------------------------------------
+     Header actions
+     ------------------------------------------------------------------ */
+  document.getElementById("ask-grok-btn").addEventListener("click", function () {
+    openModal(
+      '<div class="modal" role="dialog" aria-modal="true">' +
+        "<h2>Ask Grok</h2>" +
+        "<p>Need a hand with a job, a wiring question, or this app? Open Grok in a new tab.</p>" +
+        '<div class="modal-actions">' +
+          '<button type="button" class="btn ghost" id="modal-cancel">Close</button>' +
+          '<a class="btn accent" id="grok-link" href="https://grok.com" target="_blank" rel="noopener noreferrer" style="text-decoration:none;text-align:center;line-height:48px">Open Grok</a>' +
+        "</div></div>"
+    );
+    document.getElementById("modal-cancel").onclick = closeModal;
+  });
+
+  document.getElementById("settings-btn").addEventListener("click", openSettings);
+  document.getElementById("tab-tasks").addEventListener("click", function () { mainTab = "tasks"; renderMain(); });
+  document.getElementById("tab-time").addEventListener("click", function () { mainTab = "time"; renderMain(); });
+  document.getElementById("tab-travel").addEventListener("click", function () { mainTab = "travel"; renderMain(); });
+  document.getElementById("tab-truck").addEventListener("click", function () { mainTab = "truck"; renderMain(); });
+
+  /* ------------------------------------------------------------------
+     Rendering — Tasks + Time
+     ------------------------------------------------------------------ */
+  var viewRoot = document.getElementById("view-root");
+
+  function statusCounts() {
+    var c = { pending: 0, "in-progress": 0, completed: 0 };
+    data.tasks.forEach(function (t) { if (c[t.status] != null) c[t.status]++; });
+    return c;
+  }
+
+  function optionList(items, selected, blankLabel) {
+    var html = '<option value="">' + esc(blankLabel) + "</option>";
+    items.forEach(function (it) {
+      html += '<option value="' + esc(it.id) + '"' + (it.id === selected ? " selected" : "") + ">" + esc(it.name) + "</option>";
+    });
+    return html;
+  }
+
+  function renderMain() {
+    document.getElementById("tab-tasks").setAttribute("aria-selected", mainTab === "tasks" ? "true" : "false");
+    document.getElementById("tab-time").setAttribute("aria-selected", mainTab === "time" ? "true" : "false");
+    document.getElementById("tab-travel").setAttribute("aria-selected", mainTab === "travel" ? "true" : "false");
+    document.getElementById("tab-truck").setAttribute("aria-selected", mainTab === "truck" ? "true" : "false");
+    if (mainTab === "time") renderTime();
+    else if (mainTab === "travel") renderTravel();
+    else if (mainTab === "truck") renderTruck();
+    else renderTasks();
+  }
+
+  function renderTasks() {
+    var counts = statusCounts();
+    var labels = { pending: "Pending", "in-progress": "In Progress", completed: "Completed" };
+    var html = '<div class="status-tabs" role="tablist">';
+    ["pending", "in-progress", "completed"].forEach(function (s) {
+      html += '<button type="button" class="status-tab" data-status="' + s + '" aria-selected="' + (statusFilter === s ? "true" : "false") + '">' +
+        labels[s] + '<span class="count">' + counts[s] + "</span></button>";
+    });
+    html += '</div><div class="toolbar"><button type="button" class="btn accent block" id="new-task-btn">+ New Task</button></div>';
+    var list = data.tasks.filter(function (t) { return t.status === statusFilter; })
+      .sort(function (a, b) { return (b.updatedAt || b.createdAt || "").localeCompare(a.updatedAt || a.createdAt || ""); });
+    if (!list.length) {
+      html += '<div class="empty"><strong>No ' + labels[statusFilter].toLowerCase() + " jobs</strong>Tap New Task to add one.</div>";
+    } else {
+      list.forEach(function (t) {
+        var cli = clientName(t.clientId);
+        var proj = projectName(t.projectId);
+        var metaBits = [];
+        if (cli) metaBits.push(cli);
+        if (proj) metaBits.push(proj);
+        metaBits.push(t.address ? t.address : "No address");
+        if (t.photos && t.photos.length) metaBits.push(t.photos.length + " photo" + (t.photos.length === 1 ? "" : "s"));
+        var parts = t.parts || [];
+        if (parts.length) {
+          var gotN = 0;
+          parts.forEach(function (p) { if (p.got) gotN++; });
+          metaBits.push(gotN + " of " + parts.length + " gotten");
+        }
+        html += '<button type="button" class="card task-card ' + esc(t.priority || "medium") + '" data-open-task="' + esc(t.id) + '">' +
+          '<div class="top"><h3>' + esc(t.title || "Untitled") + '</h3><span class="prio ' + esc(t.priority || "medium") + '">' + esc(t.priority || "medium") + "</span></div>" +
+          '<div class="meta">' + esc(metaBits.join(" · ")) + "</div></button>";
+      });
+    }
+    viewRoot.innerHTML = html;
+    viewRoot.querySelectorAll(".status-tab").forEach(function (btn) {
+      btn.addEventListener("click", function () { statusFilter = btn.getAttribute("data-status"); renderTasks(); });
+    });
+    document.getElementById("new-task-btn").addEventListener("click", function () { openTaskEditor(null); });
+    viewRoot.querySelectorAll("[data-open-task]").forEach(function (btn) {
+      btn.addEventListener("click", function () { openTaskEditor(btn.getAttribute("data-open-task")); });
+    });
+  }
+
+  function parseHm(s) {
+    if (s == null) return null;
+    var str = String(s).trim();
+    if (!str) return null;
+    var p = str.split(":");
+    if (p.length < 2) return null;
+    var h = parseInt(p[0], 10);
+    var m = parseInt(p[1], 10);
+    if (isNaN(h) || isNaN(m) || h < 0 || h > 23 || m < 0 || m > 59) return null;
+    return h * 60 + m;
+  }
+
+  function normalizeHm(s) {
+    var mins = parseHm(s);
+    if (mins == null) return "";
+    var h = Math.floor(mins / 60);
+    var m = mins % 60;
+    return String(h).padStart(2, "0") + ":" + String(m).padStart(2, "0");
+  }
+
+  function formatHours(n) {
+    return (Math.round(Number(n) * 100) / 100).toFixed(2);
+  }
+
+  function formatTimeDisplay(hhmm) {
+    var mins = parseHm(hhmm);
+    if (mins == null) return "";
+    var h = Math.floor(mins / 60);
+    var suffix = h < 12 ? " AM" : " PM";
+    var h12 = h % 12;
+    if (h12 === 0) h12 = 12;
+    return h12 + ":" + String(mins % 60).padStart(2, "0") + suffix;
+  }
+
+  function computeWorkHours(arrived, left, lunchMinutes, kind) {
+    var startWord = kind === "travel" ? "Start" : "Arrived";
+    var endWord = kind === "travel" ? "End" : "Left";
+    var breakWord = kind === "travel" ? "Break" : "Lunch break";
+    var start = parseHm(arrived);
+    var end = parseHm(left);
+    if (start == null || end == null) return { ok: false, reason: "missing", message: "Enter the " + startWord.toLowerCase() + " time and the " + endWord.toLowerCase() + " time." };
+    if (end < start) end += 24 * 60;
+    else if (end === start) {
+      return { ok: false, reason: "order", message: endWord + " time should be after " + startWord + ". If it ran past midnight, enter the morning " + endWord.toLowerCase() + " time." };
+    }
+    var lunch = Number(lunchMinutes);
+    if (lunchMinutes === "" || lunchMinutes == null) lunch = 0;
+    if (isNaN(lunch) || lunch < 0) {
+      return { ok: false, reason: "lunch", message: breakWord + " can't be a negative number." };
+    }
+    var span = end - start;
+    if (lunch > span) {
+      return { ok: false, reason: "lunch-span", message: breakWord + " is longer than the time between " + startWord + " and " + endWord + "." };
+    }
+    var hours = (span - lunch) / 60;
+    if (hours <= 0) {
+      return { ok: false, reason: "zero", message: breakWord + " uses up the whole span. Check the times or minutes." };
+    }
+    return { ok: true, hours: Math.round(hours * 100) / 100, overnight: parseHm(left) < parseHm(arrived) };
+  }
+
+  function entryHours(e) {
+    if (!e) return 0;
+    if (e.arrived && e.left) {
+      var r = computeWorkHours(e.arrived, e.left, e.lunchMinutes);
+      if (r && r.ok) return r.hours;
+    }
+    return Number(e.hours) || 0;
+  }
+
+  var TRAVEL_TYPES = [
+    { id: "drive", label: "Drive" },
+    { id: "parts-run", label: "Parts run" },
+    { id: "between-jobs", label: "Between jobs" }
+  ];
+
+  function travelTypeLabel(id) {
+    for (var i = 0; i < TRAVEL_TYPES.length; i++) if (TRAVEL_TYPES[i].id === id) return TRAVEL_TYPES[i].label;
+    return "Travel";
+  }
+
+  function travelEntryHours(e) {
+    if (!e) return 0;
+    if (e.start && e.end) {
+      var r = computeWorkHours(e.start, e.end, e.breakMinutes, "travel");
+      if (r && r.ok) return r.hours;
+    }
+    return Number(e.hours) || 0;
+  }
+
+  function normalizeTravelEntry(e) {
+    if (!e || typeof e !== "object") {
+      return { id: "", type: "drive", clientId: "", projectId: "", start: "", end: "", breakMinutes: 0, hours: 0, notes: "", date: "", by: "", at: "" };
+    }
+    var typ = e.type;
+    if (typ !== "drive" && typ !== "parts-run" && typ !== "between-jobs") typ = "drive";
+    var br = e.breakMinutes;
+    if (br === "" || br == null) br = (e.start || e.end) ? 0 : 0;
+    else br = Number(br);
+    return {
+      id: e.id,
+      type: typ,
+      clientId: e.clientId || "",
+      projectId: e.projectId || "",
+      start: e.start || "",
+      end: e.end || "",
+      breakMinutes: br,
+      hours: e.hours,
+      notes: e.notes || "",
+      date: e.date || "",
+      by: e.by,
+      at: e.at
+    };
+  }
+
+  function currentDayTotalDate() { return dayTotalDate || todayYmd(); }
+
+  function hoursOnDate(list, date, fn) {
+    var total = 0;
+    (list || []).forEach(function (e) { if ((e.date || "") === date) total += fn(e); });
+    return total;
+  }
+
+  function matchesHoursFilter(e) {
+    if (timeClientFilter && e.clientId !== timeClientFilter) return false;
+    if (timeProjectFilter && e.projectId !== timeProjectFilter) return false;
+    return true;
+  }
+
+  function combinedFilterTotals() {
+    var job = 0, travel = 0;
+    (data.timeEntries || []).forEach(function (e) { if (matchesHoursFilter(e)) job += entryHours(e); });
+    (data.travelEntries || []).forEach(function (e) { if (matchesHoursFilter(e)) travel += travelEntryHours(e); });
+    return { job: job, travel: travel, total: job + travel };
+  }
+
+  function dailySummaryHtml() {
+    var date = currentDayTotalDate();
+    var job = hoursOnDate(data.timeEntries, date, entryHours);
+    var travel = hoursOnDate(data.travelEntries, date, travelEntryHours);
+    var total = job + travel;
+    return '<div class="card day-summary" id="day-summary">' +
+      "<h3>Daily total</h3>" +
+      '<div class="field"><label for="day-total-date">Date</label><input id="day-total-date" type="date" value="' + esc(date) + '"></div>' +
+      '<div class="day-summary-line" id="day-summary-text">Job ' + formatHours(job) + " + Travel " + formatHours(travel) + " = Total " + formatHours(total) + " hours</div>" +
+      "</div>";
+  }
+
+  function combinedTotalHtml() {
+    var c = combinedFilterTotals();
+    return '<div class="time-total" id="combined-total">Job ' + formatHours(c.job) + " + Travel " + formatHours(c.travel) + " = Total " + formatHours(c.total) + " hours</div>" +
+      '<p class="help">Includes job time and travel that match this filter.</p>';
+  }
+
+  function bindDaySummary(rerender) {
+    var el = document.getElementById("day-total-date");
+    if (!el) return;
+    el.addEventListener("change", function () {
+      dayTotalDate = el.value || todayYmd();
+      rerender();
+    });
+  }
+
+  function normalizeTimeEntry(e) {
+    if (!e || typeof e !== "object") {
+      return { id: "", clientId: "", projectId: "", arrived: "", left: "", lunchMinutes: null, hours: 0, materials: "", notes: "", date: "", by: "", at: "" };
+    }
+    var lunch = e.lunchMinutes;
+    if (lunch === "" || lunch == null) lunch = (e.arrived || e.left) ? 0 : null;
+    else lunch = Number(lunch);
+    return {
+      id: e.id,
+      clientId: e.clientId || "",
+      projectId: e.projectId || "",
+      arrived: e.arrived || "",
+      left: e.left || "",
+      lunchMinutes: lunch,
+      hours: e.hours,
+      materials: e.materials || "",
+      notes: e.notes || "",
+      date: e.date || "",
+      by: e.by,
+      at: e.at
+    };
+  }
+
+  function updateComputedHours() {
+    var hoursEl = document.getElementById("time-hours");
+    var hint = document.getElementById("time-hours-hint");
+    if (!hoursEl) return;
+    var arrived = val("time-arrived");
+    var left = val("time-left");
+    if (!arrived || !left) {
+      hoursEl.value = "";
+      if (hint) { hint.textContent = "Hours are calculated from Arrived, Left, and lunch."; hint.className = "help"; }
+      return;
+    }
+    var result = computeWorkHours(arrived, left, val("time-lunch"));
+    if (!result.ok) {
+      hoursEl.value = "";
+      if (hint) { hint.textContent = result.message || ""; hint.className = "help error"; }
+      return;
+    }
+    hoursEl.value = formatHours(result.hours);
+    if (hint) {
+      hint.textContent = result.overnight ? "Includes time past midnight." : "";
+      hint.className = "help";
+    }
+  }
+
+  function renderTime() {
+    var html = dailySummaryHtml();
+    html += '<div class="card"><h3 style="margin:0 0 12px">Log time</h3>';
+    html += '<div class="field"><span class="label">Client</span><div class="combo">' +
+      '<select id="time-client" class="select">' + optionList(data.clients, "", "Select client") + "</select>" +
+      '<button type="button" class="btn sm accent" id="new-client-btn">+ New Client</button></div></div>';
+    html += '<div class="field"><span class="label">Project</span><div class="combo">' +
+      '<select id="time-project" class="select">' + optionList(data.projects, "", "Select project") + "</select>" +
+      '<button type="button" class="btn sm accent" id="new-project-btn">+ New Project</button></div></div>';
+    html += '<div class="field"><label for="time-date">Date</label><input id="time-date" type="date" value="' + todayYmd() + '"></div>';
+    html += '<div class="time-pair">';
+    html += '<div class="field"><label for="time-arrived">Arrived</label><input id="time-arrived" type="time"></div>';
+    html += '<div class="field"><label for="time-left">Left</label><input id="time-left" type="time"></div>';
+    html += "</div>";
+    html += '<div class="field"><label for="time-lunch">Lunch break (minutes)</label><input id="time-lunch" type="number" min="0" step="1" inputmode="numeric" value="0"></div>';
+    html += '<div class="field"><label for="time-hours">Hours</label><input id="time-hours" type="text" readonly tabindex="0" placeholder="Calculated automatically"><p class="help" id="time-hours-hint">Hours are calculated from Arrived, Left, and lunch.</p></div>';
+    html += '<div class="field"><label for="time-materials">Materials</label><input id="time-materials" type="text" placeholder="Parts or materials used"></div>';
+    html += '<div class="field"><label for="time-notes">Notes</label><textarea id="time-notes" placeholder="What was done"></textarea></div>';
+    html += '<button type="button" class="btn accent block" id="log-time-btn">Log Time</button></div>';
+
+    html += '<div class="toolbar wrap"><div class="grow"><label class="label" for="filter-client">Filter</label></div></div>';
+    html += '<div class="row wrap" style="margin-bottom:12px">';
+    html += '<select id="filter-client" class="select grow">' + optionList(data.clients, timeClientFilter, "All clients") + "</select>";
+    html += '<select id="filter-project" class="select grow">' + optionList(data.projects, timeProjectFilter, "All projects") + "</select>";
+    html += "</div>";
+
+    var entries = data.timeEntries.filter(function (e) {
+      if (timeClientFilter && e.clientId !== timeClientFilter) return false;
+      if (timeProjectFilter && e.projectId !== timeProjectFilter) return false;
+      return true;
+    }).slice().sort(function (a, b) { return String(b.date || "").localeCompare(String(a.date || "")); });
+
+    html += combinedTotalHtml();
+
+    if (!entries.length) {
+      html += '<div class="empty"><strong>No time logged yet</strong>Add a client or project if you need one, then log hours.</div>';
+    } else {
+      entries.forEach(function (e) {
+        var c = clientName(e.clientId) || "No client";
+        var p = projectName(e.projectId);
+        var hoursText = formatHours(entryHours(e)) + " hr";
+        var timeBits = [];
+        if (fmtDate(e.date)) timeBits.push(fmtDate(e.date));
+        if (e.arrived && e.left) timeBits.push(formatTimeDisplay(e.arrived) + " – " + formatTimeDisplay(e.left));
+        if (e.arrived && e.left && Number(e.lunchMinutes) > 0) timeBits.push(String(Number(e.lunchMinutes)) + " min lunch");
+        timeBits.push(hoursText);
+        if (e.by) timeBits.push(roleLabel(e.by));
+        html += '<div class="card time-entry"><h3>' + esc(c) + (p ? " · " + esc(p) : "") + "</h3>" +
+          '<div class="meta">' + esc(timeBits.join(" · ")) + "</div>" +
+          (e.materials ? '<div class="meta">Materials: ' + esc(e.materials) + "</div>" : "") +
+          (e.notes ? "<div>" + esc(e.notes) + "</div>" : "") +
+          '<div class="entry-actions"><button type="button" class="btn sm ghost danger-text" data-del-time="' + esc(e.id) + '">Delete</button></div></div>';
+      });
+    }
+    viewRoot.innerHTML = html;
+
+    document.getElementById("new-client-btn").addEventListener("click", function () { addClientFromTime(); });
+    document.getElementById("new-project-btn").addEventListener("click", function () { addProjectFromTime(); });
+    document.getElementById("log-time-btn").addEventListener("click", logTimeEntry);
+    document.getElementById("filter-client").addEventListener("change", function (e) {
+      timeClientFilter = e.target.value; renderTime();
+    });
+    document.getElementById("filter-project").addEventListener("change", function (e) {
+      timeProjectFilter = e.target.value; renderTime();
+    });
+    viewRoot.querySelectorAll("[data-del-time]").forEach(function (btn) {
+      btn.addEventListener("click", function () { deleteTimeEntry(btn.getAttribute("data-del-time")); });
+    });
+    ["time-arrived", "time-left", "time-lunch"].forEach(function (id) {
+      var el = document.getElementById(id);
+      if (!el) return;
+      el.addEventListener("input", updateComputedHours);
+      el.addEventListener("change", updateComputedHours);
+    });
+    updateComputedHours();
+    bindDaySummary(renderTime);
+  }
+
+  async function addClientFromTime() {
+    var projectKeep = document.getElementById("time-project") ? document.getElementById("time-project").value : "";
+    var other = snapshotTimeForm();
+    var name = await promptName({ title: "New Client", label: "Client name", placeholder: "e.g. Smith Residence" });
+    if (name == null) return;
+    if (!name) { showToast("Enter a client name.", true); return; }
+    var item = { id: uid(), name: name };
+    data.clients.push(item);
+    persist();
+    renderTime();
+    restoreTimeForm(other);
+    var sel = document.getElementById("time-client");
+    var proj = document.getElementById("time-project");
+    if (sel) sel.value = item.id;
+    if (proj && projectKeep) proj.value = projectKeep;
+    showToast("Client added.");
+  }
+
+  async function addProjectFromTime() {
+    var clientKeep = document.getElementById("time-client") ? document.getElementById("time-client").value : "";
+    var other = snapshotTimeForm();
+    var name = await promptName({ title: "New Project", label: "Project name", placeholder: "e.g. Kitchen remodel" });
+    if (name == null) return;
+    if (!name) { showToast("Enter a project name.", true); return; }
+    var item = { id: uid(), name: name };
+    data.projects.push(item);
+    persist();
+    renderTime();
+    restoreTimeForm(other);
+    var sel = document.getElementById("time-project");
+    var cli = document.getElementById("time-client");
+    if (sel) sel.value = item.id;
+    if (cli && clientKeep) cli.value = clientKeep;
+    showToast("Project added.");
+  }
+
+  function snapshotTimeForm() {
+    return {
+      client: val("time-client"),
+      project: val("time-project"),
+      date: val("time-date") || todayYmd(),
+      arrived: val("time-arrived"),
+      left: val("time-left"),
+      lunch: val("time-lunch") === "" ? "0" : val("time-lunch"),
+      materials: val("time-materials"),
+      notes: val("time-notes")
+    };
+  }
+  function restoreTimeForm(s) {
+    setVal("time-client", s.client);
+    setVal("time-project", s.project);
+    setVal("time-date", s.date);
+    setVal("time-arrived", s.arrived);
+    setVal("time-left", s.left);
+    setVal("time-lunch", s.lunch == null || s.lunch === "" ? "0" : s.lunch);
+    setVal("time-materials", s.materials);
+    setVal("time-notes", s.notes);
+    updateComputedHours();
+  }
+  function val(id) { var el = document.getElementById(id); return el ? el.value : ""; }
+  function setVal(id, v) { var el = document.getElementById(id); if (el && v != null) el.value = v; }
+
+  function logTimeEntry() {
+    var arrived = normalizeHm(val("time-arrived"));
+    var left = normalizeHm(val("time-left"));
+    var lunchRaw = val("time-lunch");
+    var result = computeWorkHours(arrived, left, lunchRaw);
+    if (!result.ok) {
+      updateComputedHours();
+      showToast(result.message || "Enter the time you arrived and the time you left.", true);
+      try {
+        var focusId = result.reason === "lunch" || result.reason === "lunch-span" || result.reason === "zero" ? "time-lunch" : (!arrived ? "time-arrived" : "time-left");
+        document.getElementById(focusId).focus();
+      } catch (e) {}
+      return;
+    }
+    var lunch = lunchRaw === "" || lunchRaw == null ? 0 : Number(lunchRaw);
+    var entry = {
+      id: uid(),
+      clientId: val("time-client") || "",
+      projectId: val("time-project") || "",
+      arrived: arrived,
+      left: left,
+      lunchMinutes: lunch,
+      hours: result.hours,
+      materials: val("time-materials").trim(),
+      notes: val("time-notes").trim(),
+      date: val("time-date") || todayYmd(),
+      by: role,
+      at: nowIso()
+    };
+    data.timeEntries.push(entry);
+    persist();
+    renderTime();
+    showToast("Time logged.");
+  }
+
+  async function deleteTimeEntry(id) {
+    var ok = await confirmDlg({ title: "Delete time entry?", message: "This cannot be undone.", danger: true, ok: "Delete" });
+    if (!ok) return;
+    data.timeEntries = data.timeEntries.filter(function (e) { return e.id !== id; });
+    persist();
+    renderTime();
+    showToast("Time entry deleted.");
+  }
+
+
+  function updateComputedTravelHours() {
+    var hoursEl = document.getElementById("travel-hours");
+    var hint = document.getElementById("travel-hours-hint");
+    if (!hoursEl) return;
+    var start = val("travel-start");
+    var end = val("travel-end");
+    if (!start || !end) {
+      hoursEl.value = "";
+      if (hint) { hint.textContent = "Hours are calculated from Start, End, and break."; hint.className = "help"; }
+      return;
+    }
+    var result = computeWorkHours(start, end, val("travel-break"), "travel");
+    if (!result.ok) {
+      hoursEl.value = "";
+      if (hint) { hint.textContent = result.message || ""; hint.className = "help error"; }
+      return;
+    }
+    hoursEl.value = formatHours(result.hours);
+    if (hint) {
+      hint.textContent = result.overnight ? "Includes time past midnight." : "";
+      hint.className = "help";
+    }
+  }
+
+  function travelTypeOptions(selected) {
+    var html = "";
+    TRAVEL_TYPES.forEach(function (tp) {
+      html += '<option value="' + tp.id + '"' + (tp.id === selected ? " selected" : "") + ">" + esc(tp.label) + "</option>";
+    });
+    return html;
+  }
+
+  function renderTravel() {
+    var html = dailySummaryHtml();
+    html += '<div class="card"><h3 style="margin:0 0 12px">Log travel</h3>';
+    html += '<div class="field"><label for="travel-date">Date</label><input id="travel-date" type="date" value="' + todayYmd() + '"></div>';
+    html += '<div class="field"><label for="travel-type">Type</label><select id="travel-type" class="select">' + travelTypeOptions("drive") + "</select></div>";
+    html += '<div class="field"><span class="label">Client (optional)</span><div class="combo">' +
+      '<select id="travel-client" class="select">' + optionList(data.clients, "", "Select client") + "</select>" +
+      '<button type="button" class="btn sm accent" id="travel-new-client-btn">+ New Client</button></div></div>';
+    html += '<div class="field"><span class="label">Project (optional)</span><div class="combo">' +
+      '<select id="travel-project" class="select">' + optionList(data.projects, "", "Select project") + "</select>" +
+      '<button type="button" class="btn sm accent" id="travel-new-project-btn">+ New Project</button></div></div>';
+    html += '<div class="time-pair">';
+    html += '<div class="field"><label for="travel-start">Start time</label><input id="travel-start" type="time"></div>';
+    html += '<div class="field"><label for="travel-end">End time</label><input id="travel-end" type="time"></div>';
+    html += "</div>";
+    html += '<div class="field"><label for="travel-break">Break (minutes)</label><input id="travel-break" type="number" min="0" step="1" inputmode="numeric" value="0"></div>';
+    html += '<div class="field"><label for="travel-hours">Hours</label><input id="travel-hours" type="text" readonly tabindex="0" placeholder="Calculated automatically"><p class="help" id="travel-hours-hint">Hours are calculated from Start, End, and break.</p></div>';
+    html += '<div class="field"><label for="travel-notes">Notes</label><textarea id="travel-notes" placeholder="Where you drove, what you picked up"></textarea></div>';
+    html += '<button type="button" class="btn accent block" id="log-travel-btn">Log Travel</button></div>';
+
+    html += '<div class="toolbar wrap"><div class="grow"><label class="label" for="filter-client">Filter</label></div></div>';
+    html += '<div class="row wrap" style="margin-bottom:12px">';
+    html += '<select id="filter-client" class="select grow">' + optionList(data.clients, timeClientFilter, "All clients") + "</select>";
+    html += '<select id="filter-project" class="select grow">' + optionList(data.projects, timeProjectFilter, "All projects") + "</select>";
+    html += "</div>";
+    html += combinedTotalHtml();
+
+    var entries = (data.travelEntries || []).filter(matchesHoursFilter)
+      .slice().sort(function (a, b) { return String(b.date || "").localeCompare(String(a.date || "")); });
+    if (!entries.length) {
+      html += '<div class="empty"><strong>No travel logged yet</strong>Use this tab for drive time, parts runs, and time between jobs.</div>';
+    } else {
+      entries.forEach(function (e) {
+        var c = clientName(e.clientId);
+        var p = projectName(e.projectId);
+        var title = travelTypeLabel(e.type) + (c ? " · " + c : "") + (p ? " · " + p : "");
+        var bits = [];
+        if (fmtDate(e.date)) bits.push(fmtDate(e.date));
+        if (e.start && e.end) bits.push(formatTimeDisplay(e.start) + " – " + formatTimeDisplay(e.end));
+        if (e.start && e.end && Number(e.breakMinutes) > 0) bits.push(String(Number(e.breakMinutes)) + " min break");
+        bits.push(formatHours(travelEntryHours(e)) + " hr");
+        if (e.by) bits.push(roleLabel(e.by));
+        html += '<div class="card time-entry" data-travel-id="' + esc(e.id) + '"><h3>' + esc(title) + "</h3>" +
+          '<div class="meta">' + esc(bits.join(" · ")) + "</div>" +
+          (e.notes ? "<div>" + esc(e.notes) + "</div>" : "") +
+          '<div class="entry-actions"><button type="button" class="btn sm ghost" data-del-travel="' + esc(e.id) + '">Delete</button></div></div>';
+      });
+    }
+    viewRoot.innerHTML = html;
+    document.getElementById("travel-new-client-btn").addEventListener("click", function () { addClientFromTravel(); });
+    document.getElementById("travel-new-project-btn").addEventListener("click", function () { addProjectFromTravel(); });
+    document.getElementById("log-travel-btn").addEventListener("click", logTravelEntry);
+    document.getElementById("filter-client").addEventListener("change", function (e) { timeClientFilter = e.target.value; renderTravel(); });
+    document.getElementById("filter-project").addEventListener("change", function (e) { timeProjectFilter = e.target.value; renderTravel(); });
+    viewRoot.querySelectorAll("[data-del-travel]").forEach(function (btn) {
+      btn.addEventListener("click", function () { deleteTravelEntry(btn.getAttribute("data-del-travel")); });
+    });
+    ["travel-start", "travel-end", "travel-break"].forEach(function (id) {
+      var el = document.getElementById(id);
+      if (!el) return;
+      el.addEventListener("input", updateComputedTravelHours);
+      el.addEventListener("change", updateComputedTravelHours);
+    });
+    updateComputedTravelHours();
+    bindDaySummary(renderTravel);
+  }
+
+  function snapshotTravelForm() {
+    return {
+      type: val("travel-type") || "drive",
+      client: val("travel-client"),
+      project: val("travel-project"),
+      date: val("travel-date") || todayYmd(),
+      start: val("travel-start"),
+      end: val("travel-end"),
+      brk: val("travel-break") === "" ? "0" : val("travel-break"),
+      notes: val("travel-notes")
+    };
+  }
+  function restoreTravelForm(s) {
+    if (!s) return;
+    setVal("travel-type", s.type || "drive");
+    setVal("travel-client", s.client);
+    setVal("travel-project", s.project);
+    setVal("travel-date", s.date);
+    setVal("travel-start", s.start);
+    setVal("travel-end", s.end);
+    setVal("travel-break", s.brk == null || s.brk === "" ? "0" : s.brk);
+    setVal("travel-notes", s.notes);
+    updateComputedTravelHours();
+  }
+
+  async function addClientFromTravel() {
+    var projectKeep = val("travel-project");
+    var other = snapshotTravelForm();
+    var name = await promptName({ title: "New Client", label: "Client name", placeholder: "e.g. Smith Residence" });
+    if (name == null) return;
+    if (!name) { showToast("Enter a client name.", true); return; }
+    var item = { id: uid(), name: name };
+    data.clients.push(item);
+    persist();
+    renderTravel();
+    restoreTravelForm(other);
+    setVal("travel-client", item.id);
+    if (projectKeep) setVal("travel-project", projectKeep);
+    showToast("Client added.");
+  }
+
+  async function addProjectFromTravel() {
+    var clientKeep = val("travel-client");
+    var other = snapshotTravelForm();
+    var name = await promptName({ title: "New Project", label: "Project name", placeholder: "e.g. Kitchen remodel" });
+    if (name == null) return;
+    if (!name) { showToast("Enter a project name.", true); return; }
+    var item = { id: uid(), name: name };
+    data.projects.push(item);
+    persist();
+    renderTravel();
+    restoreTravelForm(other);
+    setVal("travel-project", item.id);
+    if (clientKeep) setVal("travel-client", clientKeep);
+    showToast("Project added.");
+  }
+
+  function logTravelEntry() {
+    var start = normalizeHm(val("travel-start"));
+    var end = normalizeHm(val("travel-end"));
+    var breakRaw = val("travel-break");
+    var typ = val("travel-type") || "drive";
+    var result = computeWorkHours(start, end, breakRaw, "travel");
+    if (!result.ok) {
+      updateComputedTravelHours();
+      showToast(result.message || "Enter the start time and the end time.", true);
+      try {
+        var focusId = result.reason === "lunch" || result.reason === "lunch-span" || result.reason === "zero" ? "travel-break" : (!start ? "travel-start" : "travel-end");
+        document.getElementById(focusId).focus();
+      } catch (e) {}
+      return;
+    }
+    var brk = breakRaw === "" || breakRaw == null ? 0 : Number(breakRaw);
+    data.travelEntries.push({
+      id: uid(),
+      type: typ,
+      clientId: val("travel-client") || "",
+      projectId: val("travel-project") || "",
+      start: start,
+      end: end,
+      breakMinutes: brk,
+      hours: result.hours,
+      notes: val("travel-notes").trim(),
+      date: val("travel-date") || todayYmd(),
+      by: role,
+      at: nowIso()
+    });
+    persist();
+    renderTravel();
+    showToast("Travel logged.");
+  }
+
+  async function deleteTravelEntry(id) {
+    var ok = await confirmDlg({ title: "Delete travel entry?", message: "This cannot be undone.", danger: true, ok: "Delete" });
+    if (!ok) return;
+    data.travelEntries = (data.travelEntries || []).filter(function (e) { return e.id !== id; });
+    persist();
+    renderTravel();
+    showToast("Travel entry deleted.");
+  }
+
+  function normalizeTruckItem(item) {
+    if (!item || typeof item !== "object") {
+      return { id: "", name: "", qty: "", unit: "qty", note: "", addedBy: "", addedAt: "", got: false, gotBy: "", gotAt: "" };
+    }
+    return {
+      id: item.id,
+      name: item.name || "",
+      qty: item.qty == null ? "" : item.qty,
+      unit: partUnit(item),
+      note: item.note || "",
+      addedBy: item.addedBy || "",
+      addedAt: item.addedAt || "",
+      got: !!item.got,
+      gotBy: item.gotBy || "",
+      gotAt: item.gotAt || ""
+    };
+  }
+
+  function canEditTruck(item) { return item && item.addedBy === role; }
+  function canDeleteTruck(item) { return item && (role === "boss" || item.addedBy === role); }
+
+  function renderTruck() {
+    var items = data.truckSupplies || [];
+    var gotN = 0;
+    items.forEach(function (it) { if (it.got) gotN++; });
+    var html = '<div class="card"><h3 style="margin:0 0 6px">Truck Supplies</h3>';
+    html += '<p class="help">Tools and supplies for the truck. Both of you can add items on this device.</p>';
+    if (items.length) html += '<p class="got-count" id="truck-got-count">' + gotN + " of " + items.length + " gotten</p>";
+    html += '<div class="field"><label for="truck-name">Item name</label><input id="truck-name" type="text" placeholder="e.g. Fish tape, spare breakers"></div>';
+    html += '<div class="part-metrics">';
+    html += '<div class="field"><label for="truck-qty">Qty</label><input id="truck-qty" type="text" inputmode="decimal" placeholder="1"></div>';
+    html += '<div class="field"><label for="truck-unit">Unit</label>' + unitSelectHtml("truck-unit", "qty") + "</div>";
+    html += '<div class="field"><label for="truck-note">Note (optional)</label><input id="truck-note" type="text" placeholder="Size, brand…"></div>';
+    html += "</div>";
+    html += '<button type="button" class="btn accent block" id="add-truck-btn">Add to Truck</button></div>';
+
+    if (!items.length) {
+      html += '<div class="empty"><strong>No truck supplies yet</strong>Add tools and stock you want on the truck.</div>';
+    } else {
+      items.slice().sort(function (a, b) { return String(b.addedAt || "").localeCompare(String(a.addedAt || "")); }).forEach(function (it) {
+        var qtyLabel = formatPartQty(it);
+        var who = "Added by " + (roleLabel(it.addedBy) || "someone") + (it.addedAt ? " · " + fmtWhen(it.addedAt) : "");
+        if (it.got) who += " · Gotten" + (it.gotBy ? " by " + roleLabel(it.gotBy) : "") + (it.gotAt ? " · " + fmtWhen(it.gotAt) : "");
+        html += '<div class="card part-item' + (it.got ? " is-got" : "") + '" data-truck-id="' + esc(it.id) + '">' +
+          '<button type="button" class="got-check" role="checkbox" aria-checked="' + (it.got ? "true" : "false") + '" data-got-truck="' + esc(it.id) + '" aria-label="' + esc((it.got ? "Mark not gotten: " : "Mark as gotten: ") + (it.name || "item")) + '">' +
+          (it.got ? "✓" : "") + "</button>" +
+          '<div class="part-body"><div class="who">' + (qtyLabel ? '<span class="part-qty-label">' + esc(qtyLabel) + "</span>" : "") + esc(who) + "</div>" +
+          '<div class="part-text"><strong>' + esc(it.name) + "</strong>" + (it.note ? " — " + esc(it.note) : "") + "</div>" +
+          '<div class="entry-actions">';
+        if (canEditTruck(it)) html += '<button type="button" class="btn sm ghost" data-edit-truck="' + esc(it.id) + '">Edit</button>';
+        if (canDeleteTruck(it)) html += '<button type="button" class="btn sm ghost" data-del-truck="' + esc(it.id) + '">Delete</button>';
+        html += "</div></div></div>";
+      });
+    }
+    viewRoot.innerHTML = html;
+    document.getElementById("add-truck-btn").addEventListener("click", addTruckItem);
+    viewRoot.querySelectorAll("[data-got-truck]").forEach(function (b) {
+      b.addEventListener("click", function (e) { e.preventDefault(); toggleTruckGot(b.getAttribute("data-got-truck")); });
+    });
+    viewRoot.querySelectorAll("[data-edit-truck]").forEach(function (b) {
+      b.addEventListener("click", function () { editTruckItem(b.getAttribute("data-edit-truck")); });
+    });
+    viewRoot.querySelectorAll("[data-del-truck]").forEach(function (b) {
+      b.addEventListener("click", function () { deleteTruckItem(b.getAttribute("data-del-truck")); });
+    });
+  }
+
+  function addTruckItem() {
+    var name = val("truck-name").trim();
+    if (!name) { showToast("Enter an item name.", true); try { document.getElementById("truck-name").focus(); } catch (e) {} return; }
+    data.truckSupplies.push(normalizeTruckItem({
+      id: uid(),
+      name: name,
+      qty: val("truck-qty").trim(),
+      unit: val("truck-unit") || "qty",
+      note: val("truck-note").trim(),
+      addedBy: role,
+      addedAt: nowIso(),
+      got: false
+    }));
+    persist();
+    renderTruck();
+    showToast("Added to truck supplies.");
+  }
+
+  function toggleTruckGot(id) {
+    var item = findById(data.truckSupplies || [], id);
+    if (!item) return;
+    item.got = !item.got;
+    if (item.got) { item.gotBy = role; item.gotAt = nowIso(); }
+    else { item.gotBy = ""; item.gotAt = ""; }
+    persist();
+    renderTruck();
+  }
+
+  async function deleteTruckItem(id) {
+    var item = findById(data.truckSupplies || [], id);
+    if (!item || !canDeleteTruck(item)) return;
+    var ok = await confirmDlg({ title: "Remove this truck item?", message: item.name || "This item will come off the list.", danger: true, ok: "Delete" });
+    if (!ok) return;
+    data.truckSupplies = data.truckSupplies.filter(function (it) { return it.id !== id; });
+    persist();
+    renderTruck();
+    showToast("Truck item removed.");
+  }
+
+  function editTruckItem(id) {
+    var item = findById(data.truckSupplies || [], id);
+    if (!item || !canEditTruck(item)) return;
+    openModal(
+      '<div class="modal" role="dialog" aria-modal="true"><h2>Edit truck item</h2>' +
+        '<div class="field"><label for="truck-edit-name">Item name</label><input id="truck-edit-name" class="text-input" type="text" value="' + esc(item.name) + '"></div>' +
+        '<div class="part-metrics">' +
+        '<div class="field"><label for="truck-edit-qty">Qty</label><input id="truck-edit-qty" class="text-input" type="text" inputmode="decimal" value="' + esc(item.qty) + '"></div>' +
+        '<div class="field"><label for="truck-edit-unit">Unit</label>' + unitSelectHtml("truck-edit-unit", item.unit || "qty") + "</div>" +
+        '<div class="field"><label for="truck-edit-note">Note</label><input id="truck-edit-note" class="text-input" type="text" value="' + esc(item.note) + '"></div>' +
+        "</div>" +
+        '<div class="modal-actions"><button type="button" class="btn ghost" id="modal-cancel">Cancel</button>' +
+        '<button type="button" class="btn accent" id="modal-ok">Save</button></div></div>'
+    );
+    modalDone = function () {};
+    document.getElementById("modal-cancel").onclick = function () { closeModal(); };
+    document.getElementById("modal-ok").onclick = function () {
+      var name = val("truck-edit-name").trim();
+      if (!name) { showToast("Enter an item name.", true); return; }
+      item.name = name;
+      item.qty = val("truck-edit-qty").trim();
+      item.unit = partUnit({ unit: val("truck-edit-unit") });
+      item.note = val("truck-edit-note").trim();
+      persist();
+      closeModal();
+      renderTruck();
+      showToast("Truck item updated.");
+    };
+  }
+
+  /* ------------------------------------------------------------------
+     Task editor
+     ------------------------------------------------------------------ */
+  var taskPanel = document.getElementById("task-panel");
+  var editingId = null;
+  var draftPriority = "medium";
+  var draftClientId = "";
+  var draftProjectId = "";
+  var draftParts = [];
+
+  function partUnit(p) {
+    var u = p && p.unit ? String(p.unit) : "qty";
+    if (u === "feet" || u === "foot") u = "ft";
+    if (u === "inches" || u === "inch") u = "in";
+    if (u !== "ft" && u !== "in") u = "qty";
+    return u;
+  }
+
+  function formatPartQty(p) {
+    var qty = p && p.qty != null ? String(p.qty).trim() : "";
+    if (!qty) return "";
+    var unit = partUnit(p);
+    if (unit === "ft") return qty + " ft";
+    if (unit === "in") return qty + " in";
+    return "x" + qty;
+  }
+
+  function normalizePart(p) {
+    if (!p || typeof p !== "object") {
+      return { id: "", name: "", qty: "", unit: "qty", note: "", got: false, by: "", at: "" };
+    }
+    return {
+      id: p.id,
+      name: p.name || "",
+      qty: p.qty == null ? "" : p.qty,
+      unit: partUnit(p),
+      note: p.note || "",
+      got: !!p.got,
+      by: p.by,
+      at: p.at
+    };
+  }
+
+  function normalizeTaskParts(task) {
+    if (!task || typeof task !== "object") return task;
+    if (Array.isArray(task.parts)) task.parts = task.parts.map(normalizePart);
+    return task;
+  }
+
+  function unitSelectHtml(id, selected) {
+    var u = partUnit({ unit: selected || "qty" });
+    return '<select id="' + id + '" class="select" aria-label="Unit">' +
+      '<option value="qty"' + (u === "qty" ? " selected" : "") + ">Qty</option>" +
+      '<option value="ft"' + (u === "ft" ? " selected" : "") + ">Feet (ft)</option>" +
+      '<option value="in"' + (u === "in" ? " selected" : "") + ">Inches (in)</option>" +
+      "</select>";
+  }
+
+  function materialsBlockHtml(parts, asCard) {
+    var gotN = 0;
+    (parts || []).forEach(function (p) { if (p.got) gotN++; });
+    var html = '<div class="' + (asCard ? "section card" : "section") + '" id="materials-section"><h3>Materials needed' +
+      (parts.length ? ' <span class="got-count" id="materials-got-count">' + gotN + " of " + parts.length + " gotten</span>" : "") +
+      "</h3>";
+    if (!parts.length) html += '<p class="muted">None added yet. Add wire, parts, or supplies as the job evolves.</p>';
+    parts.forEach(function (p) {
+      var qtyLabel = formatPartQty(p);
+      var checked = p.got ? "true" : "false";
+      html += '<div class="note part-item' + (p.got ? " is-got" : "") + '">' +
+        '<button type="button" class="got-check" role="checkbox" aria-checked="' + checked + '" data-got-part="' + esc(p.id) + '" aria-label="' + esc((p.got ? "Mark not gotten: " : "Mark as gotten: ") + (p.name || "part")) + '">' +
+        (p.got ? "✓" : "") + "</button>" +
+        '<div class="part-body"><div class="who">' +
+        (qtyLabel ? '<span class="part-qty-label">' + esc(qtyLabel) + "</span>" : "") +
+        (p.by ? esc(roleLabel(p.by)) : "Part") +
+        (p.at ? " · " + esc(fmtWhen(p.at)) : "") +
+        '</div><div class="part-text"><strong>' + esc(p.name) + "</strong>" + (p.note ? " — " + esc(p.note) : "") + "</div>" +
+        '<button type="button" class="btn sm ghost" data-del-part="' + esc(p.id) + '" style="margin-top:6px">Remove</button></div></div>';
+    });
+    html += '<div class="field"><label for="part-name">Part name</label><input id="part-name" type="text" placeholder="e.g. 3000K Edison bulb"></div>';
+    html += '<div class="part-metrics">';
+    html += '<div class="field"><label for="part-qty">Qty</label><input id="part-qty" type="text" inputmode="decimal" placeholder="1"></div>';
+    html += '<div class="field"><label for="part-unit">Unit</label>' + unitSelectHtml("part-unit", "qty") + "</div>";
+    html += '<div class="field"><label for="part-note">Note (optional)</label><input id="part-note" type="text" placeholder="Size, brand…"></div>';
+    html += "</div>";
+    html += '<button type="button" class="btn ghost block" id="add-part-btn">Add Part</button></div>';
+    return html;
+  }
+
+  function getTask(id) {
+    return findById(data.tasks, id);
+  }
+
+  function closeTaskPanel() {
+    taskPanel.hidden = true;
+    taskPanel.innerHTML = "";
+    editingId = null;
+    renderMain();
+  }
+
+  function openTaskEditor(id) {
+    editingId = id;
+    var t = id ? getTask(id) : null;
+    draftPriority = (t && t.priority) || "medium";
+    draftClientId = (t && t.clientId) || "";
+    draftProjectId = (t && t.projectId) || "";
+    draftParts = [];
+    renderTaskPanel();
+  }
+
+  function renderTaskPanel() {
+    var t = editingId ? getTask(editingId) : null;
+    var isNew = !t;
+    var title = isNew ? "New Task" : (t.title || "Task");
+    var html = '<div class="panel-bar"><button type="button" class="icon-btn" id="task-back">Back</button><h2>' + esc(isNew ? "New Task" : "Job details") + "</h2></div>";
+    html += '<div class="panel-body">';
+
+    if (!isNew) {
+      html += '<div class="section"><div class="stack">';
+      if (t.status === "pending") {
+        html += '<button type="button" class="btn ok block" id="move-start">Start Job</button>';
+      } else if (t.status === "in-progress") {
+        html += '<button type="button" class="btn ok block" id="move-complete">Mark Complete</button>';
+        html += '<button type="button" class="btn ghost block" id="move-pending">Back to Pending</button>';
+      } else {
+        html += '<button type="button" class="btn ghost block" id="move-reopen">Reopen Job</button>';
+      }
+      html += "</div></div>";
+    }
+
+    html += '<div class="section card">';
+    html += '<div class="field"><label for="task-title">Title</label><input id="task-title" type="text" value="' + esc(t ? t.title : "") + '" placeholder="e.g. Master bath fixture"></div>';
+    html += '<div class="field"><label for="task-desc">Description</label><textarea id="task-desc" placeholder="What needs to be done">' + esc(t ? t.description : "") + "</textarea></div>";
+    html += '<div class="field"><span class="label">Priority</span><div class="seg" id="prio-seg">';
+    ["high", "medium", "low"].forEach(function (p) {
+      html += '<button type="button" class="' + p + '" data-prio="' + p + '" aria-pressed="' + (draftPriority === p ? "true" : "false") + '">' + (p.charAt(0).toUpperCase() + p.slice(1)) + "</button>";
+    });
+    html += "</div></div>";
+    html += '<div class="field"><label for="task-address">Address / Location</label><input id="task-address" type="text" value="' + esc(t ? t.address : "") + '" placeholder="Street or job site"></div>';
+    html += '<div class="field"><span class="label">Client (optional)</span><div class="combo">' +
+      '<select id="task-client" class="select">' + optionList(data.clients, draftClientId, "No client") + "</select>" +
+      '<button type="button" class="btn sm accent" id="task-new-client">+ New Client</button></div></div>';
+    html += '<div class="field"><span class="label">Project (optional)</span><div class="combo">' +
+      '<select id="task-project" class="select">' + optionList(data.projects, draftProjectId, "No project") + "</select>" +
+      '<button type="button" class="btn sm accent" id="task-new-project">+ New Project</button></div></div>';
+    if (isNew) html += materialsBlockHtml(draftParts, false);
+    html += '<button type="button" class="btn accent block" id="save-task-btn">' + (isNew ? "Create Task" : "Save Changes") + "</button>";
+    if (!isNew && role === "boss") {
+      html += '<button type="button" class="btn danger block" id="delete-task-btn" style="margin-top:8px">Delete Task</button>';
+    }
+    html += "</div>";
+
+    if (!isNew) {
+      html += noteSection("Initial Notes", "initial", t.initialNotes || []);
+      html += noteSection("In Progress Notes", "inprogress", t.inProgressNotes || []);
+      html += noteSection("Completed Notes", "completed", t.completedNotes || []);
+      html += materialsBlockHtml(t.parts || [], true);
+
+      html += '<div class="section card"><h3>Photos</h3>';
+      html += '<p class="help">Photos of hand-drawn diagrams and the job site are stored on this device. They are compressed automatically.</p>';
+      var photos = t.photos || [];
+      if (photos.length) {
+        html += '<div class="photo-grid">';
+        photos.forEach(function (ph) {
+          html += '<div class="thumb"><img data-view-photo="' + esc(ph.id) + '" alt="Job photo" src="' + ph.dataUrl + '">' +
+            '<button type="button" class="del" data-del-photo="' + esc(ph.id) + '" title="Delete photo">×</button></div>';
+        });
+        html += "</div>";
+      } else {
+        html += '<p class="muted">No photos yet.</p>';
+      }
+      html += '<label class="btn ghost block file-btn">Add Photos<input id="photo-input" type="file" accept="image/*" multiple></label></div>';
+
+      html += '<p class="help">Created by ' + esc(roleLabel(t.createdBy)) + (t.createdAt ? " · " + esc(fmtWhen(t.createdAt)) : "") + "</p>";
+    }
+
+    html += "</div>";
+    taskPanel.innerHTML = html;
+    taskPanel.hidden = false;
+
+    document.getElementById("task-back").addEventListener("click", function () {
+      if (isNew) closeTaskPanel();
+      else { saveTaskFields(false); closeTaskPanel(); }
+    });
+    taskPanel.querySelectorAll("[data-prio]").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        draftPriority = btn.getAttribute("data-prio");
+        taskPanel.querySelectorAll("[data-prio]").forEach(function (b) {
+          b.setAttribute("aria-pressed", b === btn ? "true" : "false");
+        });
+      });
+    });
+    document.getElementById("task-client").addEventListener("change", function (e) { draftClientId = e.target.value; });
+    document.getElementById("task-new-client").addEventListener("click", addClientFromTask);
+    document.getElementById("task-project").addEventListener("change", function (e) { draftProjectId = e.target.value; });
+    document.getElementById("task-new-project").addEventListener("click", addProjectFromTask);
+    document.getElementById("save-task-btn").addEventListener("click", function () { saveTaskFields(true); });
+    var addPartBtn = document.getElementById("add-part-btn");
+    if (addPartBtn) addPartBtn.addEventListener("click", addPart);
+    taskPanel.querySelectorAll("[data-del-part]").forEach(function (b) {
+      b.addEventListener("click", function () { removePart(b.getAttribute("data-del-part")); });
+    });
+    taskPanel.querySelectorAll("[data-got-part]").forEach(function (b) {
+      b.addEventListener("click", function (e) {
+        e.preventDefault();
+        e.stopPropagation();
+        toggleGotPart(b.getAttribute("data-got-part"));
+      });
+    });
+
+    if (!isNew) {
+      var start = document.getElementById("move-start");
+      var complete = document.getElementById("move-complete");
+      var pending = document.getElementById("move-pending");
+      var reopen = document.getElementById("move-reopen");
+      if (start) start.addEventListener("click", function () { moveTaskStatus("in-progress"); });
+      if (complete) complete.addEventListener("click", function () { moveTaskStatus("completed"); });
+      if (pending) pending.addEventListener("click", function () { moveTaskStatus("pending"); });
+      if (reopen) reopen.addEventListener("click", function () { moveTaskStatus("in-progress"); });
+      var delBtn = document.getElementById("delete-task-btn");
+      if (delBtn) delBtn.addEventListener("click", deleteCurrentTask);
+      ["initial", "inprogress", "completed"].forEach(function (k) {
+        var b = document.getElementById("add-note-" + k);
+        if (b) b.addEventListener("click", function () { addNote(k); });
+      });
+      taskPanel.querySelectorAll("[data-view-photo]").forEach(function (img) {
+        img.addEventListener("click", function () {
+          var ph = (getTask(editingId).photos || []).filter(function (p) { return p.id === img.getAttribute("data-view-photo"); })[0];
+          if (ph) openLightbox(ph.dataUrl);
+        });
+      });
+      taskPanel.querySelectorAll("[data-del-photo]").forEach(function (b) {
+        b.addEventListener("click", function (e) {
+          e.preventDefault(); e.stopPropagation();
+          removePhoto(b.getAttribute("data-del-photo"));
+        });
+      });
+      document.getElementById("photo-input").addEventListener("change", onPhotosChosen);
+    }
+  }
+
+  function noteSection(title, key, notes) {
+    var html = '<div class="section card"><h3>' + esc(title) + "</h3>";
+    if (!notes.length) html += '<p class="muted">No notes yet.</p>';
+    notes.forEach(function (n) {
+      html += '<div class="note"><div class="who">' + esc(roleLabel(n.by) || "Someone") + " · " + esc(fmtWhen(n.at)) + "</div><div>" + esc(n.text) + "</div></div>";
+    });
+    html += '<div class="field"><label class="sr-only" for="note-' + key + '">Add note</label>' +
+      '<textarea id="note-' + key + '" placeholder="Add a note"></textarea></div>' +
+      '<button type="button" class="btn ghost block" id="add-note-' + key + '">Add Note</button></div>';
+    return html;
+  }
+
+  function readTaskForm() {
+    return {
+      title: val("task-title").trim(),
+      description: val("task-desc").trim(),
+      priority: draftPriority || "medium",
+      address: val("task-address").trim(),
+      clientId: val("task-client") || "",
+      projectId: val("task-project") || ""
+    };
+  }
+
+  function saveTaskFields(showMsg) {
+    var fields = readTaskForm();
+    if (!fields.title) {
+      showToast("Add a title for this job.", true);
+      try { document.getElementById("task-title").focus(); } catch (e) {}
+      return false;
+    }
+    draftClientId = fields.clientId;
+    draftProjectId = fields.projectId;
+    if (!editingId) {
+      var t = {
+        id: uid(),
+        title: fields.title,
+        description: fields.description,
+        priority: fields.priority,
+        address: fields.address,
+        clientId: fields.clientId,
+        projectId: fields.projectId,
+        status: "pending",
+        initialNotes: [],
+        inProgressNotes: [],
+        completedNotes: [],
+        photos: [],
+        parts: draftParts.map(normalizePart),
+        createdBy: role,
+        createdAt: nowIso(),
+        updatedAt: nowIso()
+      };
+      data.tasks.push(t);
+      var result = persist();
+      if (result.quota) return false;
+      editingId = t.id;
+      statusFilter = "pending";
+      draftParts = [];
+      if (showMsg) showToast("Task created.");
+      renderTaskPanel();
+      return true;
+    }
+    var existing = getTask(editingId);
+    if (!existing) return false;
+    existing.title = fields.title;
+    existing.description = fields.description;
+    existing.priority = fields.priority;
+    existing.address = fields.address;
+    existing.clientId = fields.clientId;
+    existing.projectId = fields.projectId;
+    existing.updatedAt = nowIso();
+    var result2 = persist();
+    if (result2.quota) return false;
+    if (showMsg) showToast("Changes saved.");
+    return true;
+  }
+
+  function moveTaskStatus(next) {
+    if (editingId && !getTask(editingId)) return;
+    if (!editingId) return;
+    saveTaskFields(false);
+    var t = getTask(editingId);
+    if (!t) return;
+    t.status = next;
+    t.updatedAt = nowIso();
+    persist();
+    statusFilter = next;
+    renderTaskPanel();
+    var labels = { pending: "Pending", "in-progress": "In Progress", completed: "Completed" };
+    showToast("Moved to " + labels[next] + ".");
+  }
+
+  async function deleteCurrentTask() {
+    var ok = await confirmDlg({ title: "Delete this job?", message: "The task, notes, parts, and photos will be removed from this device.", danger: true, ok: "Delete" });
+    if (!ok) return;
+    data.tasks = data.tasks.filter(function (t) { return t.id !== editingId; });
+    persist();
+    showToast("Task deleted.");
+    closeTaskPanel();
+  }
+
+  function snapPartFields() {
+    return { name: val("part-name"), qty: val("part-qty"), unit: val("part-unit"), note: val("part-note") };
+  }
+  function restorePartFields(s) {
+    if (!s) return;
+    setVal("part-name", s.name);
+    setVal("part-qty", s.qty);
+    setVal("part-unit", s.unit || "qty");
+    setVal("part-note", s.note);
+  }
+
+  async function addClientFromTask() {
+    var keep = readTaskForm();
+    var partSnap = snapPartFields();
+    var name = await promptName({ title: "New Client", label: "Client name", placeholder: "e.g. Smith Residence" });
+    if (name == null) return;
+    if (!name) { showToast("Enter a client name.", true); return; }
+    var item = { id: uid(), name: name };
+    data.clients.push(item);
+    persist();
+    draftClientId = item.id;
+    draftProjectId = keep.projectId;
+    draftPriority = keep.priority;
+    renderTaskPanel();
+    restoreTaskFormFields({ title: keep.title, description: keep.description, address: keep.address, clientId: item.id, projectId: keep.projectId });
+    restorePartFields(partSnap);
+    showToast("Client added.");
+  }
+
+  async function addProjectFromTask() {
+    var keep = readTaskForm();
+    var partSnap = snapPartFields();
+    var name = await promptName({ title: "New Project", label: "Project name", placeholder: "e.g. Kent — master bath" });
+    if (name == null) return;
+    if (!name) { showToast("Enter a project name.", true); return; }
+    var item = { id: uid(), name: name };
+    data.projects.push(item);
+    persist();
+    draftProjectId = item.id;
+    draftClientId = keep.clientId;
+    draftPriority = keep.priority;
+    renderTaskPanel();
+    restoreTaskFormFields({ title: keep.title, description: keep.description, address: keep.address, clientId: keep.clientId, projectId: item.id });
+    restorePartFields(partSnap);
+    showToast("Project added.");
+  }
+
+  function addNote(key) {
+    var area = document.getElementById("note-" + key);
+    var text = area ? area.value.trim() : "";
+    if (!text) { showToast("Type a note first.", true); return; }
+    saveTaskFields(false);
+    var t = getTask(editingId);
+    if (!t) return;
+    var bucket = key === "initial" ? "initialNotes" : key === "inprogress" ? "inProgressNotes" : "completedNotes";
+    if (!t[bucket]) t[bucket] = [];
+    t[bucket].push({ id: uid(), text: text, by: role, at: nowIso() });
+    t.updatedAt = nowIso();
+    persist();
+    renderTaskPanel();
+    showToast("Note added.");
+  }
+
+  function restoreTaskFormFields(keep) {
+    setVal("task-title", keep.title);
+    setVal("task-desc", keep.description);
+    setVal("task-address", keep.address);
+    setVal("task-client", keep.clientId);
+    setVal("task-project", keep.projectId);
+  }
+
+  function toggleGotPart(id) {
+    if (!editingId) {
+      draftParts.forEach(function (p) { if (p.id === id) p.got = !p.got; });
+      var keep = readTaskForm();
+      var partSnap = snapPartFields();
+      renderTaskPanel();
+      restoreTaskFormFields(keep);
+      restorePartFields(partSnap);
+      return;
+    }
+    saveTaskFields(false);
+    var t = getTask(editingId);
+    if (!t || !t.parts) return;
+    t.parts.forEach(function (p) { if (p.id === id) p.got = !p.got; });
+    t.updatedAt = nowIso();
+    persist();
+    renderTaskPanel();
+  }
+
+  function addPart() {
+    var name = val("part-name").trim();
+    if (!name) { showToast("Enter a part name.", true); return; }
+    var part = normalizePart({
+      id: uid(),
+      name: name,
+      qty: val("part-qty").trim(),
+      unit: val("part-unit") || "qty",
+      note: val("part-note").trim(),
+      by: role,
+      at: nowIso()
+    });
+    if (!editingId) {
+      draftParts.push(part);
+      var keep = readTaskForm();
+      renderTaskPanel();
+      restoreTaskFormFields(keep);
+      showToast("Part added.");
+      return;
+    }
+    saveTaskFields(false);
+    var t = getTask(editingId);
+    if (!t) return;
+    if (!t.parts) t.parts = [];
+    t.parts.push(part);
+    t.updatedAt = nowIso();
+    persist();
+    renderTaskPanel();
+    showToast("Part added.");
+  }
+
+  async function removePart(id) {
+    var ok = await confirmDlg({ title: "Remove this part?", message: "It will come off the job list.", danger: true, ok: "Remove" });
+    if (!ok) return;
+    if (!editingId) {
+      draftParts = draftParts.filter(function (p) { return p.id !== id; });
+      var keep = readTaskForm();
+      renderTaskPanel();
+      restoreTaskFormFields(keep);
+      return;
+    }
+    var t = getTask(editingId);
+    if (!t) return;
+    t.parts = (t.parts || []).filter(function (p) { return p.id !== id; });
+    t.updatedAt = nowIso();
+    persist();
+    renderTaskPanel();
+  }
+
+  async function removePhoto(id) {
+    var ok = await confirmDlg({ title: "Delete this photo?", message: "It will be removed from this device.", danger: true, ok: "Delete" });
+    if (!ok) return;
+    var t = getTask(editingId);
+    if (!t) return;
+    t.photos = (t.photos || []).filter(function (p) { return p.id !== id; });
+    t.updatedAt = nowIso();
+    persist();
+    renderTaskPanel();
+    showToast("Photo deleted.");
+  }
+
+  function compressImage(file) {
+    return new Promise(function (resolve, reject) {
+      var url;
+      try { url = URL.createObjectURL(file); }
+      catch (err) { reject(err); return; }
+      var img = new Image();
+      img.onload = function () {
+        try {
+          var max = 1280;
+          var w = img.naturalWidth || img.width;
+          var h = img.naturalHeight || img.height;
+          if (!w || !h) { URL.revokeObjectURL(url); reject(new Error("Could not read that image.")); return; }
+          var scale = Math.min(1, max / w, max / h);
+          w = Math.max(1, Math.round(w * scale));
+          h = Math.max(1, Math.round(h * scale));
+          var canvas = document.createElement("canvas");
+          canvas.width = w;
+          canvas.height = h;
+          var ctx = canvas.getContext("2d");
+          ctx.fillStyle = "#ffffff";
+          ctx.fillRect(0, 0, w, h);
+          ctx.drawImage(img, 0, 0, w, h);
+          var dataUrl = canvas.toDataURL("image/jpeg", 0.7);
+          URL.revokeObjectURL(url);
+          resolve(dataUrl);
+        } catch (err2) {
+          try { URL.revokeObjectURL(url); } catch (e2) {}
+          reject(err2);
+        }
+      };
+      img.onerror = function () {
+        try { URL.revokeObjectURL(url); } catch (e2) {}
+        reject(new Error("Could not read that image."));
+      };
+      img.src = url;
+    });
+  }
+
+  async function onPhotosChosen(e) {
+    var files = e.target.files ? Array.prototype.slice.call(e.target.files) : [];
+    e.target.value = "";
+    if (!files.length) return;
+    saveTaskFields(false);
+    var t = getTask(editingId);
+    if (!t) return;
+    if (!t.photos) t.photos = [];
+    var added = 0;
+    for (var i = 0; i < files.length; i++) {
+      try {
+        var dataUrl = await compressImage(files[i]);
+        t.photos.push({ id: uid(), dataUrl: dataUrl, by: role, at: nowIso() });
+        t.updatedAt = nowIso();
+        var result = persist();
+        if (result.quota) {
+          t.photos.pop();
+          persist();
+          showToast("Storage is full, so that photo was not saved. Delete older photos or jobs and try again. Photos stay on this device only.", true);
+          break;
+        }
+        added++;
+      } catch (err) {
+        showToast("Could not add one of the photos. Try a different picture.", true);
+      }
+    }
+    renderTaskPanel();
+    if (added) showToast(added === 1 ? "Photo added." : added + " photos added.");
+  }
+
+  /* ------------------------------------------------------------------
+     Settings, export / import
+     ------------------------------------------------------------------ */
+  function openSettings() {
+    var html = '<div class="modal" role="dialog" aria-modal="true"><h2>Settings</h2>';
+    html += "<h3>Clients</h3>";
+    if (!data.clients.length) html += '<p class="muted">No saved clients yet.</p>';
+    html += '<ul class="settings-list">';
+    data.clients.forEach(function (c) {
+      html += '<li><span class="name">' + esc(c.name) + "</span>" +
+        '<button type="button" class="btn sm ghost" data-ren-client="' + esc(c.id) + '">Rename</button>' +
+        '<button type="button" class="btn sm ghost" data-del-client="' + esc(c.id) + '">Remove</button></li>';
+    });
+    html += '</ul><button type="button" class="btn sm accent" id="set-new-client" style="margin:8px 0 16px">+ New Client</button>';
+    html += "<h3>Projects</h3>";
+    if (!data.projects.length) html += '<p class="muted">No saved projects yet. Projects are shared between tasks and time logs.</p>';
+    html += '<ul class="settings-list">';
+    data.projects.forEach(function (p) {
+      html += '<li><span class="name">' + esc(p.name) + "</span>" +
+        '<button type="button" class="btn sm ghost" data-ren-project="' + esc(p.id) + '">Rename</button>' +
+        '<button type="button" class="btn sm ghost" data-del-project="' + esc(p.id) + '">Remove</button></li>';
+    });
+    html += '</ul><button type="button" class="btn sm accent" id="set-new-project" style="margin:8px 0 16px">+ New Project</button>';
+    html += "<h3>Backup</h3><p>Export a JSON copy of jobs, time, clients, and projects. Useful before you move this app to a shared live link later.</p>";
+    html += '<div class="stack"><button type="button" class="btn ghost block" id="export-btn">Export JSON backup</button>';
+    html += '<label class="btn ghost block file-btn">Import JSON backup<input id="import-input" type="file" accept="application/json,.json"></label></div>';
+    html += '<div class="modal-actions" style="margin-top:16px"><button type="button" class="btn accent block" id="modal-cancel">Done</button></div></div>';
+    openModal(html);
+    document.getElementById("modal-cancel").onclick = function () { closeModal(); renderMain(); };
+    document.getElementById("set-new-client").onclick = async function () {
+      var name = await promptName({ title: "New Client", label: "Client name" });
+      if (name) { data.clients.push({ id: uid(), name: name }); persist(); }
+      openSettings();
+    };
+    document.getElementById("set-new-project").onclick = async function () {
+      var name = await promptName({ title: "New Project", label: "Project name" });
+      if (name) { data.projects.push({ id: uid(), name: name }); persist(); }
+      openSettings();
+    };
+    modalRoot.querySelectorAll("[data-ren-client]").forEach(function (b) {
+      b.onclick = async function () {
+        var c = findById(data.clients, b.getAttribute("data-ren-client"));
+        if (!c) return;
+        var name = await promptName({ title: "Rename Client", label: "Client name", value: c.name });
+        if (name) { c.name = name; persist(); }
+        openSettings();
+      };
+    });
+    modalRoot.querySelectorAll("[data-del-client]").forEach(function (b) {
+      b.onclick = async function () {
+        var ok = await confirmDlg({ title: "Remove this client?", message: "Time logs that used it will keep their hours but show no client name.", danger: true, ok: "Remove" });
+        if (ok) {
+          var id = b.getAttribute("data-del-client");
+          data.clients = data.clients.filter(function (c) { return c.id !== id; });
+          persist();
+        }
+        openSettings();
+      };
+    });
+    modalRoot.querySelectorAll("[data-ren-project]").forEach(function (b) {
+      b.onclick = async function () {
+        var p = findById(data.projects, b.getAttribute("data-ren-project"));
+        if (!p) return;
+        var name = await promptName({ title: "Rename Project", label: "Project name", value: p.name });
+        if (name) { p.name = name; persist(); }
+        openSettings();
+      };
+    });
+    modalRoot.querySelectorAll("[data-del-project]").forEach(function (b) {
+      b.onclick = async function () {
+        var ok = await confirmDlg({ title: "Remove this project?", message: "Jobs and time logs that used it will keep their other details.", danger: true, ok: "Remove" });
+        if (ok) {
+          var id = b.getAttribute("data-del-project");
+          data.projects = data.projects.filter(function (p) { return p.id !== id; });
+          persist();
+        }
+        openSettings();
+      };
+    });
+    document.getElementById("export-btn").onclick = exportBackup;
+    document.getElementById("import-input").onchange = importBackup;
+  }
+
+  function exportBackup() {
+    try {
+      var blob = new Blob([JSON.stringify({ exportedAt: nowIso(), data: data }, null, 2)], { type: "application/json" });
+      var a = document.createElement("a");
+      a.href = URL.createObjectURL(blob);
+      a.download = "electrical-tasks-backup-" + todayYmd() + ".json";
+      document.body.appendChild(a);
+      a.click();
+      setTimeout(function () { URL.revokeObjectURL(a.href); a.remove(); }, 500);
+      showToast("Backup downloaded.");
+    } catch (err) {
+      showToast("Could not export the backup.", true);
+    }
+  }
+
+  function importBackup(e) {
+    var file = e.target.files && e.target.files[0];
+    e.target.value = "";
+    if (!file) return;
+    var reader = new FileReader();
+    reader.onload = async function () {
+      try {
+        var parsed = JSON.parse(String(reader.result || ""));
+        var incoming = parsed && parsed.data ? parsed.data : parsed;
+        var next = normalizeData(incoming);
+        var ok = await confirmDlg({
+          title: "Replace all data?",
+          message: "Importing this backup will replace the jobs, time logs, clients, and projects currently on this device.",
+          danger: true,
+          ok: "Import"
+        });
+        if (!ok) { openSettings(); return; }
+        data = next;
+        persist();
+        closeModal();
+        renderMain();
+        showToast("Backup imported.");
+      } catch (err) {
+        showToast("That file could not be read as a backup.", true);
+      }
+    };
+    reader.onerror = function () { showToast("Could not read that file.", true); };
+    reader.readAsText(file);
+  }
+
+  /* ------------------------------------------------------------------
+     Boot — storage access is already wrapped; bind UI before any
+     optional session restore work that could have failed in older apps.
+     ------------------------------------------------------------------ */
+  try {
+    data = loadData();
+    if (storageBlocked) showStorageBanner();
+    var session = loadSession();
+    if (session && session.role) {
+      role = session.role;
+      enterApp();
+    } else {
+      try { passwordInput.focus(); } catch (e) {}
+    }
+  } catch (err) {
+    data = emptyData();
+    try { passwordInput.focus(); } catch (e2) {}
+  }
+})();
+</script>
+</body>
+</html>
